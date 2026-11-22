@@ -297,7 +297,8 @@ func (r *BinaryResolver) Lookup(rawIP string) Location {
 	if rows > binaryBlockRows {
 		rows = binaryBlockRows
 	}
-	buf := make([]byte, int(rows)*binaryRecordSize)
+	var block [binaryBlockRows * binaryRecordSize]byte
+	buf := block[:int(rows)*binaryRecordSize]
 	if _, err := r.file.ReadAt(buf, int64(binaryHeaderSize+b.row*binaryRecordSize)); err != nil {
 		return Location{}
 	}
