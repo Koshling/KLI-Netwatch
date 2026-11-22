@@ -44,6 +44,7 @@ func (o *overview) record(e event.AccessEvent, opts GeoOptions, category classif
 
 func RunInterval(ctx context.Context, scan func(context.Context, func(event.AccessEvent) error) (int, error), opts GeoOptions, start, end time.Time) error {
 	d := newDashboard(opts)
+	d.intervalOnly = true
 	d.overview = newOverview(start, end)
 	skipped, err := scan(ctx, func(e event.AccessEvent) error { d.add(e); return nil })
 	if err != nil {

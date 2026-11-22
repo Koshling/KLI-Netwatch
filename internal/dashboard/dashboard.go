@@ -46,6 +46,7 @@ type Dashboard struct {
 	themeIndex  int
 	clearScreen bool
 	hideGeoOverlay bool
+	intervalOnly bool
 	prevFrame   []string
 	prevWidth   int
 	prevHeight  int
@@ -394,7 +395,7 @@ func (d *Dashboard) add(e event.AccessEvent) {
 			d.clients[e.ClientIP] = category
 		}
 
-		if d.geoOptions.Resolver != nil {
+		if !d.intervalOnly && d.geoOptions.Resolver != nil {
 			key, seen := d.geoSeen[e.ClientIP]
 			if !seen {
 				loc := d.geoOptions.Resolver.Lookup(e.ClientIP)
@@ -524,7 +525,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 	d.signalCap = signalLimit(l.GlobeWidth, l.GlobeHeight)
 	if len(d.signals) > d.signalCap {
 		for _, signal := range d.signals[d.signalCap:] {
-			d.enqueueSignal(signal)
+			d.enqueueSignal(signal, false)
 		}
 		d.signals = d.signals[:d.signalCap]
 	}
@@ -833,18 +834,21 @@ func (d *Dashboard) startSignal(key geoKey, source string, category classifier.C
 			break
 		}
 	}
-	d.enqueueSignal(marker)
+	d.enqueueSignal(marker, true)
 }
 
-func (d *Dashboard) enqueueSignal(marker geoMarker) {
+func (d *Dashboard) enqueueSignal(marker geoMarker, newRequest bool) {
+	marker.Age = 0
 	for i, queued := range d.pending {
 		if queued.Source == marker.Source {
-			d.pending[i] = marker
+			// A displaced pulse predates the request already waiting for this IP.
+			if newRequest {
+				d.pending[i] = marker
+			}
 			return
 		}
 	}
 	if len(d.pending) < 512 {
-		marker.Age = 0
 		d.pending = append(d.pending, marker)
 	}
 }

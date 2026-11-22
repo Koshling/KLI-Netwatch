@@ -129,3 +129,22 @@ func TestGlobePulseDrawsLongerTail(t *testing.T) {
 		}
 	}
 }
+
+func TestResizeKeepsWaitingRequest(t *testing.T) {
+	d := newDashboard(GeoOptions{})
+	now := time.Unix(100, 0)
+	d.currentSecond = now
+	for _, ip := range []string{"one", "two", "three", "four", "five"} {
+		d.signals = append(d.signals, geoMarker{Source: ip, Category: classifier.User, Seen: now, Age: 4})
+	}
+	d.startSignal(geoKey{}, "four", classifier.Threat, now)
+	d.frame(80, 24)
+	if len(d.pending) != 2 || d.pending[0].Category != classifier.Threat || d.pending[1].Source != "five" {
+		t.Fatalf("unexpected queue after resize: %+v", d.pending)
+	}
+	for _, marker := range d.pending {
+		if marker.Age != 0 {
+			t.Fatal("requeued pulse did not restart")
+		}
+	}
+}
