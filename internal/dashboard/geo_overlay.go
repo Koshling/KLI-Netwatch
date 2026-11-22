@@ -109,8 +109,11 @@ func renderGlobeWithTraffic(
 	for _, visitor := range visitors {
 		p := project(visitor.Longitude, visitor.Latitude)
 		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x].glyph == 0 {
-			if glyph := sourceGlyph(now.Sub(visitor.Seen)); glyph != 0 { plot(p.x, p.y, glyph) }
-			marked++
+			if glyph := sourceGlyph(now.Sub(visitor.Seen)); glyph != 0 {
+				pulse = visitor.Category
+				plot(p.x, p.y, glyph)
+				marked++
+			}
 		}
 	}
 	for i := len(recent)-1; i >= 0 && marked < limit; i-- {
@@ -118,16 +121,13 @@ func renderGlobeWithTraffic(
 		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x].glyph == 0 {
 			glyph := sourceGlyph(now.Sub(recent[i].Seen))
 			if glyph == 0 { continue }
+			pulse = recent[i].Category
 			plot(p.x, p.y, glyph)
 			marked++
 		}
 	}
 	for _, visitor := range visitors {
 		pulse = visitor.Category
-		// Leave a quiet frame between flashes, including in marker-only mode.
-		if visitor.Age%4 == 3 {
-			continue
-		}
 		if server == nil {
 			p := project(visitor.Longitude, visitor.Latitude)
 			if p.depth > 0 {
@@ -216,9 +216,6 @@ func drawGeoArc(
 			glyph := '.'
 			if trail == 0 {
 				glyph = '*'
-				if age%4 == 2 {
-					glyph = '+'
-				}
 			}
 			plot(current.x, current.y, glyph)
 		}

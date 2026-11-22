@@ -249,7 +249,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 			}
 			if replay == nil || !replay.paused {
 				d.advanceSignals()
-				step := 0.035
+				step := globeStep
 				if replay != nil {
 					step *= float64(replay.globeSpeed())
 				}
@@ -816,6 +816,7 @@ func (d *Dashboard) startSignal(key geoKey, source string, category classifier.C
 	for i := range d.recent {
 		if d.recent[i].samePlace(marker) {
 			d.recent[i].Seen = seen
+			d.recent[i].Category = category
 			break
 		}
 	}
@@ -848,9 +849,6 @@ func (d *Dashboard) scheduleSignals() {
 		if !marker.Seen.IsZero() && d.currentSecond.Sub(marker.Seen) >= 2*time.Minute {
 			continue
 		}
-		lat := marker.Latitude * math.Pi / 180
-		lon := marker.Longitude * math.Pi / 180 + d.angle
-		depth := math.Sin(lat)*math.Sin(globeTilt) + math.Cos(lat)*math.Cos(lon)*math.Cos(globeTilt)
 		active := false
 		for _, signal := range d.signals {
 			if signal.Source == marker.Source {
@@ -858,7 +856,7 @@ func (d *Dashboard) scheduleSignals() {
 				break
 			}
 		}
-		if active || len(d.signals) >= d.signalCap || depth <= 0 {
+		if active || len(d.signals) >= d.signalCap || !marker.canLaunch(d.angle, max(1, d.replayGlobeSpeed)) {
 			waiting = append(waiting, marker)
 			continue
 		}
@@ -883,4 +881,22 @@ func (d *Dashboard) advanceSignals() {
 		}
 	}
 	d.signals = active
+}
+
+const globeStep = 0.035
+
+// Reserve a short visibility window so a queued source cannot spend its
+// first frames grazing the silhouette as the globe rotates away.
+func (m geoMarker) canLaunch(angle float64, rotationSpeed int) bool {
+	lat := m.Latitude * math.Pi / 180
+	lon := m.Longitude * math.Pi / 180 + angle
+	height := math.Sin(lat) * math.Sin(globeTilt)
+	radius := math.Cos(lat) * math.Cos(globeTilt)
+	for frame := 0; frame < 3; frame++ {
+		depth := height + radius*math.Cos(lon+float64(frame*rotationSpeed)*globeStep)
+		if depth < 0.4 {
+			return false
+		}
+	}
+	return true
 }

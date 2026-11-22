@@ -54,8 +54,8 @@ func TestTrafficPulseFrames(t *testing.T) {
 			t.Fatal("expected a visible pulse at its origin")
 		}
 		marker.Age = 3
-		if !strings.Contains(render(destination, marker), "o") {
-			t.Fatal("blink must restore the underlying frame")
+		if !strings.Contains(render(destination, marker), "*") {
+			t.Fatal("pulse head disappeared")
 		}
 	}
 	project := func(lon, lat float64) screenPoint { return screenPoint{x: int(lon + 100), depth: 1} }
@@ -95,5 +95,20 @@ func TestSourceAgeAndQueuedCategories(t *testing.T) {
 	d.scheduleSignals()
 	if len(d.signals) != 1 || d.signals[0].Category != classifier.Bot {
 		t.Fatal("queued pulse lost its classification")
+	}
+}
+
+func TestSignalWaitsForVisibleLaunch(t *testing.T) {
+	d := newDashboard(GeoOptions{})
+	d.signalCap = 1
+	d.startSignal(geoKey{longitude: 8700}, "edge", classifier.Bot, time.Time{})
+	d.scheduleSignals()
+	if len(d.signals) != 0 || len(d.pending) != 1 {
+		t.Fatal("source at the rim must keep its turn")
+	}
+	d.angle = -1.5
+	d.scheduleSignals()
+	if len(d.signals) != 1 || len(d.pending) != 0 {
+		t.Fatal("source should launch after rotating into view")
 	}
 }
