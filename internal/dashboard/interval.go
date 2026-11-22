@@ -18,7 +18,7 @@ type overview struct {
 	world      [90][180]int
 	timeline   [120]int
 	located    int
-	routes     bool
+	routes     int
 }
 
 func newOverview(start, end time.Time) *overview { return &overview{start: start, end: end} }
@@ -77,7 +77,7 @@ func (d *Dashboard) showOverview(ctx context.Context, keys <-chan byte, skipped 
 				return nil
 			}
 			if (k == 'l' || k == 'L') && d.geoOptions.ServerSet {
-				d.overview.routes = !d.overview.routes
+				d.overview.routes = (d.overview.routes + 1) % 3
 				d.clearScreen = true
 			}
 			if k >= '1' && k <= '5' {
@@ -116,13 +116,13 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		}
 	}
 	serverCell := -1
-	var routes []bool
+	var routes []rune
 	if d.geoOptions.ServerSet {
 		sx := min(179, max(0, int((d.geoOptions.ServerLongitude+180)/2))) * left / 180
 		sy := min(89, max(0, int((90-d.geoOptions.ServerLatitude)/2))) * height / 90
 		serverCell = sy*left + sx
-		if o.routes {
-			routes = overviewRoutes(grid, left, height, serverCell)
+		if o.routes != 0 {
+			routes = overviewRoutes(grid, left, height, serverCell, o.routes == 2)
 		}
 	}
 	lines := []string{t.Accent + "REQUESTS / TIME"}
@@ -165,8 +165,9 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 					b.WriteString(t.Accent + "@")
 				case n > 0:
 					b.WriteString(t.Data + "*")
-				case routes != nil && routes[(i-1)*left+x]:
-					b.WriteString(t.Muted + ".")
+				case routes != nil && routes[(i-1)*left+x] != 0:
+					b.WriteString(t.Muted)
+					b.WriteRune(routes[(i-1)*left+x])
 				case isLand((float64(x)+0.5)*360/float64(left)-180, 90-(float64(i)-0.5)*180/float64(height)):
 					b.WriteString(t.Muted + "░")
 				default:
@@ -202,8 +203,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	put(h-2, t.Muted+strings.Repeat("═", w))
 	controls := "[Q] Exit   [1-5] Themes   " + t.Name
 	if serverCell >= 0 {
-		state := "off"
-		if o.routes { state = "on" }
+		state := [...]string{"off", "dots", "braille"}[o.routes]
 		controls = "[L] Lines " + state + "   " + controls
 	}
 	put(h-1, t.Accent+controls)
@@ -217,7 +217,7 @@ func peakIfTraffic(peak, total int) int {
 }
 
 // Draw routes from the busiest visible cells, wrapping across the date line.
-func overviewRoutes(grid []int, width, height, server int) []bool {
+func overviewRoutes(grid []int, width, height, server int, braille bool) []rune {
 	var sources []int
 	for cell, count := range grid {
 		if count > 0 && cell != server {
@@ -225,18 +225,28 @@ func overviewRoutes(grid []int, width, height, server int) []bool {
 		}
 	}
 	sort.SliceStable(sources, func(i, j int) bool { return grid[sources[i]] > grid[sources[j]] })
-	mask := make([]bool, len(grid))
+	mask := make([]rune, len(grid))
+	cols, rows := 1, 1
+	if braille { cols, rows = 2, 4 }
+	bits := [4][2]rune{{1, 8}, {2, 16}, {4, 32}, {64, 128}}
 	for _, cell := range sources[:min(len(sources), signalLimit(width,height))] {
 		x, y := cell%width, cell/width
 		dx, dy := server%width-x, server/width-y
 		if dx > width/2 { dx -= width }
 		if dx < -width/2 { dx += width }
+		x, y = x*cols+cols/2, y*rows+rows/2
+		dx, dy = dx*cols, dy*rows
 		steps := max(dx, -dx, dy, -dy)
 		for i := 1; i < steps; i++ {
 			f := float64(i)/float64(steps)
-			col := (width+x+int(math.Round(float64(dx)*f)))%width
+			col := (width*cols+x+int(math.Round(float64(dx)*f)))%(width*cols)
 			row := y+int(math.Round(float64(dy)*f))
-			mask[row*width+col] = true
+			index := (row/rows)*width + col/cols
+			if braille {
+				mask[index] |= 0x2800 | bits[row%4][col%2]
+			} else {
+				mask[index] = '.'
+			}
 		}
 	}
 	return mask
