@@ -212,7 +212,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	put(h-2, t.Muted+strings.Repeat("═", w))
 	controls := "[Q] Exit   [1-5] Themes   " + t.Name
 	if serverCell >= 0 {
-		state := [...]string{"off", "dots", "braille", "terrain"}[o.routes]
+		state := [...]string{"off", "dots", "braille", "efficient"}[o.routes]
 		controls = "[L] Lines " + state + "   " + controls
 	}
 	put(h-1, t.Accent+controls)
