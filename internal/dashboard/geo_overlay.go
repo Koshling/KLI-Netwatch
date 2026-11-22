@@ -104,7 +104,9 @@ func renderGlobeWithTraffic(
 		}
 	}
 
-	limit := max(2, signalLimit(width, height)*3-1)
+	capacity := signalLimit(width, height)
+	limit := max(2, capacity*3-1)
+	tail := max(1, capacity/4)
 	marked := 0
 	for _, visitor := range visitors {
 		p := project(visitor.Longitude, visitor.Latitude)
@@ -135,7 +137,7 @@ func renderGlobeWithTraffic(
 			}
 			continue
 		}
-		drawGeoArc(visitor.Latitude, visitor.Longitude, server.Latitude, server.Longitude, visitor.Age, project, plot)
+		drawGeoArc(visitor.Latitude, visitor.Longitude, server.Latitude, server.Longitude, visitor.Age, tail, project, plot)
 	}
 
 	pulse = ""
@@ -158,7 +160,7 @@ func renderGlobeWithTraffic(
 
 func drawGeoArc(
 	lat1, lon1, lat2, lon2 float64,
-	age int,
+	age, tail int,
 	project func(float64, float64) screenPoint,
 	plot func(int, int, rune),
 ) {
@@ -180,8 +182,8 @@ func drawGeoArc(
 	omega := math.Acos(dot)
 	sinOmega := math.Sin(omega)
 
-	// Sample only the moving head and its two fading positions.
-	for trail := 1; trail >= 0; trail-- {
+	// Draw older positions first so the head stays visible in a shared cell.
+	for trail := tail; trail >= 0; trail-- {
 		t := float64(age-trail) / float64(signalFrames-1)
 		if t < 0 || t > 1 {
 			continue

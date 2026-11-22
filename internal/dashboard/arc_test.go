@@ -62,13 +62,13 @@ func TestTrafficPulseFrames(t *testing.T) {
 	last := -1
 	for _, age := range []int{0, 4, 8} {
 		cells, head := 0, -1
-		drawGeoArc(0, 0, 0, 60, age, project, func(x, y int, glyph rune) {
+		drawGeoArc(0, 0, 0, 60, age, 1, project, func(x, y int, glyph rune) {
 			cells++
 			if glyph != '.' {
 				head = x
 			}
 		})
-		if cells > 3 || head <= last {
+		if cells > 2 || head <= last {
 			t.Fatalf("age %d: cells = %d, head = %d", age, cells, head)
 		}
 		last = head
@@ -110,5 +110,22 @@ func TestSignalWaitsForVisibleLaunch(t *testing.T) {
 	d.scheduleSignals()
 	if len(d.signals) != 1 || len(d.pending) != 0 {
 		t.Fatal("source should launch after rotating into view")
+	}
+}
+
+func TestGlobePulseDrawsLongerTail(t *testing.T) {
+	project := func(lon, lat float64) screenPoint {
+		return screenPoint{x: int(lon + 100), depth: 1}
+	}
+	for tail := 1; tail <= 3; tail++ {
+		dots := 0
+		drawGeoArc(0, 0, 0, 60, 4, tail, project, func(x, y int, glyph rune) {
+			if glyph == '.' {
+				dots++
+			}
+		})
+		if dots != tail {
+			t.Fatalf("tail length %d: drew %d dots", tail, dots)
+		}
 	}
 }
