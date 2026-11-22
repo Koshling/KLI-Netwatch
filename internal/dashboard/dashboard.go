@@ -54,6 +54,8 @@ type Dashboard struct {
 	geoMarkers map[geoKey]int
 	signals    []geoMarker
 	signalCap  int
+	pending []geoMarker
+	recent []geoMarker
 }
 
 func Run(ctx context.Context, events <-chan event.AccessEvent) error {
@@ -124,7 +126,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				input = events
 			}
 			if !replay.seeking {
-				d.signals = d.signals[:0]
+				d.signals, d.pending, d.recent = nil, nil, nil
 				shown = replay.target
 				// Use the target to vary the turn and keep each jump clearly visible.
 				degrees := 90 + uint64(shown.Unix())%181
@@ -517,9 +519,13 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 
 	d.signalCap = signalLimit(l.GlobeWidth, l.GlobeHeight)
 	if len(d.signals) > d.signalCap {
+		for _, signal := range d.signals[d.signalCap:] {
+			d.enqueueSignal(signal)
+		}
 		d.signals = d.signals[:d.signalCap]
 	}
 
+	d.scheduleSignals()
 	var server *geoMarker
 	if d.geoOptions.ServerSet {
 		server = &geoMarker{
@@ -528,8 +534,10 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		}
 	}
 
+	places := append([]geoMarker(nil), d.pending...)
+	places = append(places, d.recent...)
 	globe := renderGlobeWithTraffic(
-		l.GlobeWidth, l.GlobeHeight, d.angle, t, server, d.signals,
+		l.GlobeWidth, l.GlobeHeight, d.angle, t, server, d.signals, places...,
 	)
 	for i := 0; i < len(globe) && i+1 < l.ContentRows-2; i++ {
 		left[i+1] = globe[i]
@@ -799,16 +807,60 @@ func (d *Dashboard) rateGraph(height, width int, t Theme) []string {
 }
 
 func (d *Dashboard) startSignal(key geoKey) {
-	if len(d.signals) >= d.signalCap {
-		return
-	}
-	lat, lon := float64(key.latitude)/100, float64(key.longitude)/100
-	for _, signal := range d.signals {
-		if signal.Latitude == lat && signal.Longitude == lon {
+	marker := geoMarker{Latitude: float64(key.latitude)/100, Longitude: float64(key.longitude)/100}
+	for _, active := range d.signals {
+		if active.samePlace(marker) {
 			return
 		}
 	}
-	d.signals = append(d.signals, geoMarker{Latitude: lat, Longitude: lon})
+	d.enqueueSignal(marker)
+}
+
+func (d *Dashboard) enqueueSignal(marker geoMarker) {
+	for i, queued := range d.pending {
+		if queued.samePlace(marker) {
+			d.pending[i].Seen = d.currentSecond
+			return
+		}
+	}
+	if len(d.pending) < 512 {
+		marker.Seen = d.currentSecond
+		marker.Age = 0
+		d.pending = append(d.pending, marker)
+	}
+}
+
+func (d *Dashboard) scheduleSignals() {
+	recent := d.recent[:0]
+	for _, marker := range d.recent {
+		if d.currentSecond.Sub(marker.Seen) < 30*time.Second {
+			recent = append(recent, marker)
+		}
+	}
+	d.recent = recent
+	waiting := d.pending[:0]
+	for _, marker := range d.pending {
+		if !marker.Seen.IsZero() && d.currentSecond.Sub(marker.Seen) >= 2*time.Minute {
+			continue
+		}
+		lat := marker.Latitude * math.Pi / 180
+		lon := marker.Longitude * math.Pi / 180 + d.angle
+		depth := math.Sin(lat)*math.Sin(globeTilt) + math.Cos(lat)*math.Cos(lon)*math.Cos(globeTilt)
+		if len(d.signals) >= d.signalCap || depth <= 0 {
+			waiting = append(waiting, marker)
+			continue
+		}
+		d.signals = append(d.signals, marker)
+		for i, old := range d.recent {
+			if old.samePlace(marker) {
+				d.recent = append(d.recent[:i], d.recent[i+1:]...)
+				break
+			}
+		}
+		marker.Seen = d.currentSecond
+		d.recent = append(d.recent, marker)
+	}
+	d.pending = waiting
 }
 
 func (d *Dashboard) advanceSignals() {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"netwatch/internal/geoip"
 )
@@ -19,6 +20,11 @@ type geoMarker struct {
 	Latitude  float64
 	Longitude float64
 	Age       int
+	Seen      time.Time
+}
+
+func (m geoMarker) samePlace(other geoMarker) bool {
+	return m.Latitude == other.Latitude && m.Longitude == other.Longitude
 }
 
 type screenPoint struct {
@@ -32,9 +38,10 @@ func renderGlobeWithTraffic(
 	theme Theme,
 	server *geoMarker,
 	visitors []geoMarker,
+	recent ...geoMarker,
 ) []string {
 	lines := renderGlobe(width, height, angle, theme)
-	if width < 2 || height < 2 || (server == nil && len(visitors) == 0) {
+	if width < 2 || height < 2 || (server == nil && len(visitors) == 0 && len(recent) == 0) {
 		return lines
 	}
 
@@ -92,6 +99,22 @@ func renderGlobeWithTraffic(
 		}
 	}
 
+	limit := max(2, signalLimit(width, height)*3-1)
+	marked := 0
+	for _, visitor := range visitors {
+		p := project(visitor.Longitude, visitor.Latitude)
+		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x] == 0 {
+			plot(p.x, p.y, 'o')
+			marked++
+		}
+	}
+	for i := len(recent)-1; i >= 0 && marked < limit; i-- {
+		p := project(recent[i].Longitude, recent[i].Latitude)
+		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x] == 0 {
+			plot(p.x, p.y, '@')
+			marked++
+		}
+	}
 	for _, visitor := range visitors {
 		// Leave a quiet frame between flashes, including in marker-only mode.
 		if visitor.Age%4 == 3 {
@@ -149,7 +172,7 @@ func drawGeoArc(
 	sinOmega := math.Sin(omega)
 
 	// Sample only the moving head and its two fading positions.
-	for trail := 2; trail >= 0; trail-- {
+	for trail := 1; trail >= 0; trail-- {
 		t := float64(age-trail) / float64(signalFrames-1)
 		if t < 0 || t > 1 {
 			continue
@@ -236,6 +259,10 @@ func applyGlobeOverlay(line string, overlay []rune, theme Theme) string {
 				color = theme.Accent
 			case 'S':
 				color = theme.Data
+			}
+			if theme.Traffic != "" {
+				color = theme.Traffic
+				if char == '*' || char == 'S' { color += "\033[1m" }
 			}
 			out.WriteString(color)
 			out.WriteRune(char)

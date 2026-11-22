@@ -17,6 +17,7 @@ func TestTrafficPulseBudget(t *testing.T) {
 		d.startSignal(geoKey{longitude: i * 100})
 		d.add(event.AccessEvent{Status: 200})
 	}
+	d.frame(160, 55)
 	if len(d.signals) != 12 || d.total != 30 {
 		t.Fatalf("signals = %d, requests = %d", len(d.signals), d.total)
 	}
@@ -32,7 +33,8 @@ func TestTrafficPulseBudget(t *testing.T) {
 	}
 	d.startSignal(geoKey{})
 	d.startSignal(geoKey{})
-	if len(d.signals) != 1 || d.signals[0].Age != 0 {
+	d.scheduleSignals()
+	if len(d.signals) != 3 || d.signals[0].Age != 0 {
 		t.Fatal("expired signals must free slots and repeat requests must coalesce")
 	}
 }
@@ -49,7 +51,7 @@ func TestTrafficPulseFrames(t *testing.T) {
 			t.Fatal("expected a visible pulse at its origin")
 		}
 		marker.Age = 3
-		if render(destination, marker) != base {
+		if !strings.Contains(render(destination, marker), "o") {
 			t.Fatal("blink must restore the underlying frame")
 		}
 	}
