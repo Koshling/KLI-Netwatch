@@ -12,10 +12,13 @@ import (
 	"netwatch/internal/event"
 )
 
+// Allocate latitude bands only where requests have been located.
+const densityBandHeight = 15
+
 // Fixed grids keep the map and timeline independent of the request count.
 type overview struct {
 	start, end time.Time
-	world      [90][180]density
+	world      [90 / densityBandHeight]*[densityBandHeight][180]density
 	timeline   [120]int
 	located    int
 	routes     int
@@ -38,7 +41,11 @@ func (o *overview) record(e event.AccessEvent, opts GeoOptions, category classif
 	index := 0
 	if category == classifier.Bot { index = 1 }
 	if category == classifier.Threat { index = 2 }
-	o.world[y][x][index]++
+	band := y / densityBandHeight
+	if o.world[band] == nil {
+		o.world[band] = new([densityBandHeight][180]density)
+	}
+	o.world[band][y%densityBandHeight][x][index]++
 	o.located++
 }
 
@@ -114,9 +121,15 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	height := min(h-11, max(6, left/4))
 	landMaskOnce.Do(buildLandMask)
 	grid := make([]density, left*height)
-	for y, line := range o.world {
-		for x, n := range line {
-			grid[(y*height/90)*left+x*left/180].add(n)
+	for bandIndex, band := range o.world {
+		if band == nil {
+			continue
+		}
+		for row := range band {
+			y := bandIndex*densityBandHeight + row
+			for x, n := range band[row] {
+				grid[(y*height/90)*left+x*left/180].add(n)
+			}
 		}
 	}
 	serverCell := -1
