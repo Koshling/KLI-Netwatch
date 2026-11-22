@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"netwatch/internal/geoip"
+	"netwatch/internal/classifier"
 )
 
 type GeoOptions struct {
@@ -21,6 +22,8 @@ type geoMarker struct {
 	Longitude float64
 	Age       int
 	Seen      time.Time
+	Source    string
+	Category  classifier.Category
 }
 
 func (m geoMarker) samePlace(other geoMarker) bool {
@@ -38,6 +41,7 @@ func renderGlobeWithTraffic(
 	theme Theme,
 	server *geoMarker,
 	visitors []geoMarker,
+	now time.Time,
 	recent ...geoMarker,
 ) []string {
 	lines := renderGlobe(width, height, angle, theme)
@@ -62,21 +66,22 @@ func renderGlobeWithTraffic(
 		cosTilt: math.Cos(globeTilt),
 	}
 
-	overlay := make([][]rune, height)
+	var pulse classifier.Category
+	overlay := make([][]globeCell, height)
 	for y := range overlay {
-		overlay[y] = make([]rune, width)
+		overlay[y] = make([]globeCell, width)
 	}
 
 	plot := func(x, y int, char rune) {
 		if x < 0 || x >= width || y < 0 || y >= height {
 			return
 		}
-		old := overlay[y][x]
+		old := overlay[y][x].glyph
 		if old == 'S' {
 			return
 		}
 		if char == 'S' || old == 0 || old == ' ' || char == '*' || char == '+' {
-			overlay[y][x] = char
+			overlay[y][x] = globeCell{char, pulse}
 		}
 	}
 
@@ -103,19 +108,22 @@ func renderGlobeWithTraffic(
 	marked := 0
 	for _, visitor := range visitors {
 		p := project(visitor.Longitude, visitor.Latitude)
-		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x] == 0 {
-			plot(p.x, p.y, 'o')
+		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x].glyph == 0 {
+			if glyph := sourceGlyph(now.Sub(visitor.Seen)); glyph != 0 { plot(p.x, p.y, glyph) }
 			marked++
 		}
 	}
 	for i := len(recent)-1; i >= 0 && marked < limit; i-- {
 		p := project(recent[i].Longitude, recent[i].Latitude)
-		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x] == 0 {
-			plot(p.x, p.y, '@')
+		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x].glyph == 0 {
+			glyph := sourceGlyph(now.Sub(recent[i].Seen))
+			if glyph == 0 { continue }
+			plot(p.x, p.y, glyph)
 			marked++
 		}
 	}
 	for _, visitor := range visitors {
+		pulse = visitor.Category
 		// Leave a quiet frame between flashes, including in marker-only mode.
 		if visitor.Age%4 == 3 {
 			continue
@@ -130,6 +138,7 @@ func renderGlobeWithTraffic(
 		drawGeoArc(visitor.Latitude, visitor.Longitude, server.Latitude, server.Longitude, visitor.Age, project, plot)
 	}
 
+	pulse = ""
 	if server != nil {
 		p := project(server.Longitude, server.Latitude)
 		if p.depth > 0 {
@@ -225,7 +234,7 @@ func signalLimit(width, height int) int {
 	return min(maxSignals, max(1, width*height/180))
 }
 
-func applyGlobeOverlay(line string, overlay []rune, theme Theme) string {
+func applyGlobeOverlay(line string, overlay []globeCell, theme Theme) string {
 	var out strings.Builder
 	cell := 0
 
@@ -249,8 +258,8 @@ func applyGlobeOverlay(line string, overlay []rune, theme Theme) string {
 			break
 		}
 
-		if cell < len(overlay) && overlay[cell] != 0 && overlay[cell] != ' ' {
-			char := overlay[cell]
+		if cell < len(overlay) && overlay[cell].glyph != 0 {
+			char := overlay[cell].glyph
 			color := theme.Data
 			switch char {
 			case '.':
@@ -263,6 +272,9 @@ func applyGlobeOverlay(line string, overlay []rune, theme Theme) string {
 			if theme.Traffic != "" {
 				color = theme.Traffic
 				if char == '*' || char == 'S' { color += "\033[1m" }
+			}
+			if category := overlay[cell].category; category != "" {
+				color = pulseColor(category, theme)
 			}
 			out.WriteString(color)
 			out.WriteRune(char)
@@ -289,4 +301,38 @@ func geoStatus(options GeoOptions, count int) string {
 		return "GEOIP: OFF"
 	}
 	return fmt.Sprintf("GEOIP: ON | GEO POINTS: %d", count)
+}
+
+type globeCell struct {
+	glyph rune
+	category classifier.Category
+}
+
+func sourceGlyph(age time.Duration) rune {
+	switch {
+	case age < 5*time.Second:
+		return 'o'
+	case age < 15*time.Second:
+		return '@'
+	case age < 30*time.Second:
+		return ':'
+	default:
+		return 0
+	}
+}
+
+func pulseColor(category classifier.Category, theme Theme) string {
+	// Explicit foreground and background keep contrast on the white canvas.
+	light := theme.Name == "REVERSE MONO"
+	switch category {
+	case classifier.Bot:
+		if light { return "\033[1;36;47m" }
+		return "\033[1;96m"
+	case classifier.Threat:
+		if light { return "\033[1;31;47m" }
+		return "\033[1;91m"
+	default:
+		if light { return "\033[1;34;47m" }
+		return "\033[1;93m"
+	}
 }

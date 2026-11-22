@@ -401,7 +401,7 @@ func (d *Dashboard) add(e event.AccessEvent) {
 				d.geoSeen[e.ClientIP] = key
 			}
 			if key != nil {
-				d.startSignal(*key)
+				d.startSignal(*key, e.ClientIP, category, e.Time)
 			}
 		}
 	}
@@ -537,7 +537,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 	places := append([]geoMarker(nil), d.pending...)
 	places = append(places, d.recent...)
 	globe := renderGlobeWithTraffic(
-		l.GlobeWidth, l.GlobeHeight, d.angle, t, server, d.signals, places...,
+		l.GlobeWidth, l.GlobeHeight, d.angle, t, server, d.signals, d.currentSecond, places...,
 	)
 	for i := 0; i < len(globe) && i+1 < l.ContentRows-2; i++ {
 		left[i+1] = globe[i]
@@ -806,11 +806,17 @@ func (d *Dashboard) rateGraph(height, width int, t Theme) []string {
 	return result
 }
 
-func (d *Dashboard) startSignal(key geoKey) {
-	marker := geoMarker{Latitude: float64(key.latitude)/100, Longitude: float64(key.longitude)/100}
-	for _, active := range d.signals {
-		if active.samePlace(marker) {
-			return
+func (d *Dashboard) startSignal(key geoKey, source string, category classifier.Category, seen time.Time) {
+	marker := geoMarker{Latitude: float64(key.latitude)/100, Longitude: float64(key.longitude)/100, Source: source, Category: category, Seen: seen}
+	for i := range d.signals {
+		if d.signals[i].samePlace(marker) {
+			d.signals[i].Seen = seen
+		}
+	}
+	for i := range d.recent {
+		if d.recent[i].samePlace(marker) {
+			d.recent[i].Seen = seen
+			break
 		}
 	}
 	d.enqueueSignal(marker)
@@ -818,13 +824,12 @@ func (d *Dashboard) startSignal(key geoKey) {
 
 func (d *Dashboard) enqueueSignal(marker geoMarker) {
 	for i, queued := range d.pending {
-		if queued.samePlace(marker) {
-			d.pending[i].Seen = d.currentSecond
+		if queued.Source == marker.Source {
+			d.pending[i] = marker
 			return
 		}
 	}
 	if len(d.pending) < 512 {
-		marker.Seen = d.currentSecond
 		marker.Age = 0
 		d.pending = append(d.pending, marker)
 	}
@@ -846,7 +851,14 @@ func (d *Dashboard) scheduleSignals() {
 		lat := marker.Latitude * math.Pi / 180
 		lon := marker.Longitude * math.Pi / 180 + d.angle
 		depth := math.Sin(lat)*math.Sin(globeTilt) + math.Cos(lat)*math.Cos(lon)*math.Cos(globeTilt)
-		if len(d.signals) >= d.signalCap || depth <= 0 {
+		active := false
+		for _, signal := range d.signals {
+			if signal.Source == marker.Source {
+				active = true
+				break
+			}
+		}
+		if active || len(d.signals) >= d.signalCap || depth <= 0 {
 			waiting = append(waiting, marker)
 			continue
 		}
@@ -857,7 +869,6 @@ func (d *Dashboard) scheduleSignals() {
 				break
 			}
 		}
-		marker.Seen = d.currentSecond
 		d.recent = append(d.recent, marker)
 	}
 	d.pending = waiting
