@@ -365,13 +365,13 @@ func keyboardInput() (<-chan byte, func()) {
 }
 
 func (d *Dashboard) add(e event.AccessEvent) {
+	category := d.classifier.Classify(e)
 	if d.overview != nil {
-		d.overview.record(e, d.geoOptions)
+		d.overview.record(e, d.geoOptions, category)
 	}
 	d.total++
 	d.currentCount++
 
-	category := d.classifier.Classify(e)
 	if e.ClientIP != "" {
 		previous := d.clients[e.ClientIP]
 		if category != previous {

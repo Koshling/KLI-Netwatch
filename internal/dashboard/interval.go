@@ -15,7 +15,7 @@ import (
 // Fixed grids keep the map and timeline independent of the request count.
 type overview struct {
 	start, end time.Time
-	world      [90][180]int
+	world      [90][180]density
 	timeline   [120]int
 	located    int
 	routes     int
@@ -23,7 +23,7 @@ type overview struct {
 
 func newOverview(start, end time.Time) *overview { return &overview{start: start, end: end} }
 
-func (o *overview) record(e event.AccessEvent, opts GeoOptions) {
+func (o *overview) record(e event.AccessEvent, opts GeoOptions, category classifier.Category) {
 	fraction := float64(e.Time.Sub(o.start)) / float64(o.end.Sub(o.start))
 	o.timeline[min(119, max(0, int(fraction*120)))]++
 	if opts.Resolver == nil {
@@ -35,7 +35,10 @@ func (o *overview) record(e event.AccessEvent, opts GeoOptions) {
 	}
 	x := min(179, max(0, int((loc.Longitude+180)/2)))
 	y := min(89, max(0, int((90-loc.Latitude)/2)))
-	o.world[y][x]++
+	index := 0
+	if category == classifier.Bot { index = 1 }
+	if category == classifier.Threat { index = 2 }
+	o.world[y][x][index]++
 	o.located++
 }
 
@@ -109,14 +112,14 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	right := w - left - 3
 	height := min(h-11, max(6, left/4))
 	landMaskOnce.Do(buildLandMask)
-	grid := make([]int, left*height)
+	grid := make([]density, left*height)
 	for y, line := range o.world {
 		for x, n := range line {
-			grid[(y*height/90)*left+x*left/180] += n
+			grid[(y*height/90)*left+x*left/180].add(n)
 		}
 	}
 	serverCell := -1
-	var routes []rune
+	var routes []globeCell
 	if d.geoOptions.ServerSet {
 		sx := min(179, max(0, int((d.geoOptions.ServerLongitude+180)/2))) * left / 180
 		sy := min(89, max(0, int((90-d.geoOptions.ServerLatitude)/2))) * height / 90
@@ -157,7 +160,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		case i <= height:
 			var b strings.Builder
 			for x := 0; x < left; x++ {
-				n := grid[(i-1)*left+x]
+				n := grid[(i-1)*left+x].total()
 				switch {
 				case (i-1)*left+x == serverCell:
 					b.WriteString(t.Accent + "S")
@@ -165,9 +168,11 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 					b.WriteString(t.Accent + "@")
 				case n > 0:
 					b.WriteString(t.Data + "*")
-				case routes != nil && routes[(i-1)*left+x] != 0:
-					b.WriteString(t.Muted)
-					b.WriteRune(routes[(i-1)*left+x])
+				case routes != nil && routes[(i-1)*left+x].glyph != 0:
+					route := routes[(i-1)*left+x]
+					b.WriteString(pulseColor(route.category, t))
+					b.WriteRune(route.glyph)
+					b.WriteString("\033[0m")
 				case isLand((float64(x)+0.5)*360/float64(left)-180, 90-(float64(i)-0.5)*180/float64(height)):
 					b.WriteString(t.Muted + "░")
 				default:
@@ -216,20 +221,52 @@ func peakIfTraffic(peak, total int) int {
 	return peak
 }
 
-// Draw routes from the busiest visible cells, wrapping across the date line.
-func overviewRoutes(grid []int, width, height, server int, braille bool) []rune {
-	var sources []int
-	for cell, count := range grid {
-		if count > 0 && cell != server {
-			sources = append(sources, cell)
-		}
+type density [3]int
+
+func (d density) total() int { return d[0]+d[1]+d[2] }
+func (d *density) add(other density) {
+	for i, n := range other { d[i] += n }
+}
+
+type routeGroup struct {
+	counts density
+	xSum, ySum float64
+	cells []int
+}
+
+func overviewRoutes(grid []density, width, height, server int, braille bool) []globeCell {
+	// Group 6 columns by 3 rows, accounting for the shape of terminal cells.
+	stride := (width+5)/6
+	groups := make([]routeGroup, stride*((height+2)/3))
+	for cell, counts := range grid {
+		n := counts.total()
+		if n == 0 || cell == server { continue }
+		x, y := cell%width, cell/width
+		g := &groups[(y/3)*stride+x/6]
+		g.counts.add(counts)
+		g.xSum += float64(x)*float64(n)
+		g.ySum += float64(y)*float64(n)
+		g.cells = append(g.cells, cell)
 	}
-	sort.SliceStable(sources, func(i, j int) bool { return grid[sources[i]] > grid[sources[j]] })
-	mask := make([]rune, len(grid))
+	sort.SliceStable(groups, func(i,j int) bool { return groups[i].counts.total() > groups[j].counts.total() })
+	mask := make([]globeCell, len(grid))
 	cols, rows := 1, 1
 	if braille { cols, rows = 2, 4 }
 	bits := [4][2]rune{{1, 8}, {2, 16}, {4, 32}, {64, 128}}
-	for _, cell := range sources[:min(len(sources), signalLimit(width,height))] {
+	for _, g := range groups[:min(len(groups), signalLimit(width,height))] {
+		total := float64(g.counts.total())
+		if total == 0 { break }
+		cx, cy := g.xSum/total, g.ySum/total
+		cell, best := 0, math.Inf(1)
+		for _, candidate := range g.cells {
+			dx, dy := float64(candidate%width)-cx, 2*(float64(candidate/width)-cy)
+			if distance := dx*dx+dy*dy; distance < best {
+				cell, best = candidate, distance
+			}
+		}
+		category := classifier.User
+		if g.counts[1] > g.counts[0] { category = classifier.Bot }
+		if g.counts[2] >= max(g.counts[0],g.counts[1]) { category = classifier.Threat }
 		x, y := cell%width, cell/width
 		dx, dy := server%width-x, server/width-y
 		if dx > width/2 { dx -= width }
@@ -242,10 +279,11 @@ func overviewRoutes(grid []int, width, height, server int, braille bool) []rune 
 			col := (width*cols+x+int(math.Round(float64(dx)*f)))%(width*cols)
 			row := y+int(math.Round(float64(dy)*f))
 			index := (row/rows)*width + col/cols
+			if mask[index].category == "" { mask[index].category = category }
 			if braille {
-				mask[index] |= 0x2800 | bits[row%4][col%2]
+				mask[index].glyph |= 0x2800 | bits[row%4][col%2]
 			} else {
-				mask[index] = '.'
+				mask[index].glyph = '.'
 			}
 		}
 	}
