@@ -50,8 +50,10 @@ type Dashboard struct {
 	prevHeight  int
 
 	geoOptions GeoOptions
-	geoSeen    map[string]bool
+	geoSeen    map[string]*geoKey
 	geoMarkers map[geoKey]int
+	signals    []geoMarker
+	signalCap  int
 }
 
 func Run(ctx context.Context, events <-chan event.AccessEvent) error {
@@ -69,13 +71,15 @@ func newDashboard(options GeoOptions) *Dashboard {
 		rates:       make([]int, 120),
 		clearScreen: true,
 		geoOptions:  options,
-		geoSeen:     make(map[string]bool),
+		geoSeen:     make(map[string]*geoKey),
 		geoMarkers:  make(map[geoKey]int),
 	}
 }
 
 func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions, replay *replayClock) error {
 	d := newDashboard(options)
+	layout := calculateLayout(terminalSize())
+	d.signalCap = signalLimit(layout.GlobeWidth, layout.GlobeHeight)
 	var stream *replayStream
 	if replay != nil {
 		stream = replay.openStream(ctx)
@@ -120,6 +124,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				input = events
 			}
 			if !replay.seeking {
+				d.signals = d.signals[:0]
 				shown = replay.target
 				// Use the target to vary the turn and keep each jump clearly visible.
 				degrees := 90 + uint64(shown.Unix())%181
@@ -200,6 +205,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 						replay.skipped = 0
 						fresh := newDashboard(options)
 						fresh.overview = newOverview(replay.start, replay.end)
+						fresh.signalCap = d.signalCap
 						fresh.angle, fresh.themeIndex = d.angle, d.themeIndex
 						d = fresh
 						d.advanceReplayRate(replay.start)
@@ -240,6 +246,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				break
 			}
 			if replay == nil || !replay.paused {
+				d.advanceSignals()
 				step := 0.035
 				if replay != nil {
 					step *= float64(replay.globeSpeed())
@@ -381,15 +388,18 @@ func (d *Dashboard) add(e event.AccessEvent) {
 			d.clients[e.ClientIP] = category
 		}
 
-		if d.geoOptions.Resolver != nil && !d.geoSeen[e.ClientIP] {
-			d.geoSeen[e.ClientIP] = true
-			loc := d.geoOptions.Resolver.Lookup(e.ClientIP)
-			if loc.Found {
-				key := geoKey{
-					latitude:  int(loc.Latitude * 100),
-					longitude: int(loc.Longitude * 100),
+		if d.geoOptions.Resolver != nil {
+			key, seen := d.geoSeen[e.ClientIP]
+			if !seen {
+				loc := d.geoOptions.Resolver.Lookup(e.ClientIP)
+				if loc.Found {
+					key = &geoKey{latitude: int(loc.Latitude * 100), longitude: int(loc.Longitude * 100)}
+					d.geoMarkers[*key]++
 				}
-				d.geoMarkers[key]++
+				d.geoSeen[e.ClientIP] = key
+			}
+			if key != nil {
+				d.startSignal(*key)
 			}
 		}
 	}
@@ -505,13 +515,9 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 
 	left[0] = t.Accent + "GLOBAL TRAFFIC" + "\033[0m"
 
-	var visitors []geoMarker
-	for key, count := range d.geoMarkers {
-		visitors = append(visitors, geoMarker{
-			Latitude:  float64(key.latitude) / 100,
-			Longitude: float64(key.longitude) / 100,
-			Count:     count,
-		})
+	d.signalCap = signalLimit(l.GlobeWidth, l.GlobeHeight)
+	if len(d.signals) > d.signalCap {
+		d.signals = d.signals[:d.signalCap]
 	}
 
 	var server *geoMarker
@@ -523,7 +529,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 	}
 
 	globe := renderGlobeWithTraffic(
-		l.GlobeWidth, l.GlobeHeight, d.angle, t, server, visitors,
+		l.GlobeWidth, l.GlobeHeight, d.angle, t, server, d.signals,
 	)
 	for i := 0; i < len(globe) && i+1 < l.ContentRows-2; i++ {
 		left[i+1] = globe[i]
@@ -790,4 +796,28 @@ func (d *Dashboard) rateGraph(height, width int, t Theme) []string {
 	}
 
 	return result
+}
+
+func (d *Dashboard) startSignal(key geoKey) {
+	if len(d.signals) >= d.signalCap {
+		return
+	}
+	lat, lon := float64(key.latitude)/100, float64(key.longitude)/100
+	for _, signal := range d.signals {
+		if signal.Latitude == lat && signal.Longitude == lon {
+			return
+		}
+	}
+	d.signals = append(d.signals, geoMarker{Latitude: lat, Longitude: lon})
+}
+
+func (d *Dashboard) advanceSignals() {
+	active := d.signals[:0]
+	for _, signal := range d.signals {
+		signal.Age++
+		if signal.Age < signalFrames {
+			active = append(active, signal)
+		}
+	}
+	d.signals = active
 }

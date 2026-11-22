@@ -64,7 +64,7 @@ func TestReplayEventUpdatesGlobe(t *testing.T) {
 		clients:    make(map[string]classifier.Category),
 		classifier: classifier.New(),
 		geoOptions: GeoOptions{Resolver: resolver},
-		geoSeen:    make(map[string]bool),
+		geoSeen:    make(map[string]*geoKey),
 		geoMarkers: make(map[geoKey]int),
 	}
 	start := time.Unix(100, 0)

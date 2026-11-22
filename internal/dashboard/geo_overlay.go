@@ -18,7 +18,7 @@ type GeoOptions struct {
 type geoMarker struct {
 	Latitude  float64
 	Longitude float64
-	Count     int
+	Age       int
 }
 
 type screenPoint struct {
@@ -65,10 +65,10 @@ func renderGlobeWithTraffic(
 			return
 		}
 		old := overlay[y][x]
-		if old == 'S' || old == '@' {
+		if old == 'S' {
 			return
 		}
-		if char == 'S' || char == '@' || old == 0 || old == ' ' || char == '*' {
+		if char == 'S' || old == 0 || old == ' ' || char == '*' || char == '+' {
 			overlay[y][x] = char
 		}
 	}
@@ -92,26 +92,19 @@ func renderGlobeWithTraffic(
 		}
 	}
 
-	if server != nil {
-		for _, visitor := range visitors {
-			drawGeoArc(
-				server.Latitude, server.Longitude,
-				visitor.Latitude, visitor.Longitude,
-				project, plot,
-			)
-		}
-	}
-
 	for _, visitor := range visitors {
-		p := project(visitor.Longitude, visitor.Latitude)
-		if p.depth <= 0 {
+		// Leave a quiet frame between flashes, including in marker-only mode.
+		if visitor.Age%4 == 3 {
 			continue
 		}
-		marker := '*'
-		if visitor.Count > 1 {
-			marker = '@'
+		if server == nil {
+			p := project(visitor.Longitude, visitor.Latitude)
+			if p.depth > 0 {
+				plot(p.x, p.y, '*')
+			}
+			continue
 		}
-		plot(p.x, p.y, marker)
+		drawGeoArc(visitor.Latitude, visitor.Longitude, server.Latitude, server.Longitude, visitor.Age, project, plot)
 	}
 
 	if server != nil {
@@ -133,6 +126,7 @@ func renderGlobeWithTraffic(
 
 func drawGeoArc(
 	lat1, lon1, lat2, lon2 float64,
+	age int,
 	project func(float64, float64) screenPoint,
 	plot func(int, int, rune),
 ) {
@@ -154,12 +148,13 @@ func drawGeoArc(
 	omega := math.Acos(dot)
 	sinOmega := math.Sin(omega)
 
-	const steps = 96
-	var previous screenPoint
-	previousVisible := false
+	// Sample only the moving head and its two fading positions.
+	for trail := 2; trail >= 0; trail-- {
+		t := float64(age-trail) / float64(signalFrames-1)
+		if t < 0 || t > 1 {
+			continue
+		}
 
-	for i := 0; i <= steps; i++ {
-		t := float64(i) / steps
 		var v [3]float64
 
 		if omega < 1e-8 || math.Abs(sinOmega) < 1e-8 {
@@ -185,43 +180,26 @@ func drawGeoArc(
 		lat := math.Asin(v[2]) * 180 / math.Pi
 		lon := math.Atan2(v[1], v[0]) * 180 / math.Pi
 		current := project(lon, lat)
-		visible := current.depth > 0
-
-		if visible && previousVisible {
-			drawScreenLine(previous.x, previous.y, current.x, current.y, plot)
+		if current.depth > 0 {
+			glyph := '.'
+			if trail == 0 {
+				glyph = '*'
+				if age%4 == 2 {
+					glyph = '+'
+				}
+			}
+			plot(current.x, current.y, glyph)
 		}
-		previous = current
-		previousVisible = visible
 	}
 }
 
-func drawScreenLine(x0, y0, x1, y1 int, plot func(int, int, rune)) {
-	dx := int(math.Abs(float64(x1 - x0)))
-	dy := int(math.Abs(float64(y1 - y0)))
-	sx, sy := -1, -1
-	if x0 < x1 {
-		sx = 1
-	}
-	if y0 < y1 {
-		sy = 1
-	}
+const signalFrames = 9
+const maxSignals = 12
 
-	err := dx - dy
-	for {
-		plot(x0, y0, '.')
-		if x0 == x1 && y0 == y1 {
-			break
-		}
-		e2 := 2 * err
-		if e2 > -dy {
-			err -= dy
-			x0 += sx
-		}
-		if e2 < dx {
-			err += dx
-			y0 += sy
-		}
-	}
+func signalLimit(width, height int) int {
+	// A wide, shallow panel has empty columns on either side of the globe.
+	width = min(width, int(math.Ceil(float64(height)*2*globeMaxAspect*(0.47/0.46))))
+	return min(maxSignals, max(1, width*height/180))
 }
 
 func applyGlobeOverlay(line string, overlay []rune, theme Theme) string {
@@ -254,7 +232,7 @@ func applyGlobeOverlay(line string, overlay []rune, theme Theme) string {
 			switch char {
 			case '.':
 				color = theme.Muted
-			case '*', '@':
+			case '*', '+':
 				color = theme.Accent
 			case 'S':
 				color = theme.Data
