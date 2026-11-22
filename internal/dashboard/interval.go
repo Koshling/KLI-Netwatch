@@ -80,7 +80,7 @@ func (d *Dashboard) showOverview(ctx context.Context, keys <-chan byte, skipped 
 				return nil
 			}
 			if (k == 'l' || k == 'L') && d.geoOptions.ServerSet {
-				d.overview.routes = (d.overview.routes + 1) % 3
+				d.overview.routes = (d.overview.routes + 1) % 4
 				d.clearScreen = true
 			}
 			if k >= '1' && k <= '5' {
@@ -125,7 +125,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		sy := min(89, max(0, int((90-d.geoOptions.ServerLatitude)/2))) * height / 90
 		serverCell = sy*left + sx
 		if o.routes != 0 {
-			routes = overviewRoutes(grid, left, height, serverCell, o.routes == 2)
+			routes = overviewRoutes(grid, left, height, serverCell, o.routes >= 2)
 		}
 	}
 	lines := []string{t.Accent + "REQUESTS / TIME"}
@@ -171,7 +171,11 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 				case routes != nil && routes[(i-1)*left+x].glyph != 0:
 					route := routes[(i-1)*left+x]
 					b.WriteString(pulseColor(route.category, t))
-					b.WriteRune(route.glyph)
+					if o.routes == 3 && isLand((float64(x)+0.5)*360/float64(left)-180, 90-(float64(i)-0.5)*180/float64(height)) {
+						b.WriteRune('░')
+					} else {
+						b.WriteRune(route.glyph)
+					}
 					b.WriteString("\033[0m")
 				case isLand((float64(x)+0.5)*360/float64(left)-180, 90-(float64(i)-0.5)*180/float64(height)):
 					b.WriteString(t.Muted + "░")
@@ -208,7 +212,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	put(h-2, t.Muted+strings.Repeat("═", w))
 	controls := "[Q] Exit   [1-5] Themes   " + t.Name
 	if serverCell >= 0 {
-		state := [...]string{"off", "dots", "braille"}[o.routes]
+		state := [...]string{"off", "dots", "braille", "terrain"}[o.routes]
 		controls = "[L] Lines " + state + "   " + controls
 	}
 	put(h-1, t.Accent+controls)
