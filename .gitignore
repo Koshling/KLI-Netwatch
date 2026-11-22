@@ -32,3 +32,27 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# NETWATCH: local builds
+/netwatch
+/netwatch-geoip-convert
+
+# NETWATCH: local runtime data (GeoIP databases, imports, logs)
+/data/
+*.nwgeo
+*.log
+
+# NETWATCH: local configuration, credentials
+/configs/netwatch.json
+.env.*
+*.pem
+*.key
+
+# NETWATCH: local backups, generated diagnostics, scratch files
+/.netwatch-backups/
+*.bak
+*.before-*
+*.broken-backup
+*.tmp
+*.swp
+*~
