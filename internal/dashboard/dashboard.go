@@ -45,6 +45,7 @@ type Dashboard struct {
 
 	themeIndex  int
 	clearScreen bool
+	hideGeoOverlay bool
 	prevFrame   []string
 	prevWidth   int
 	prevHeight  int
@@ -208,6 +209,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 						fresh := newDashboard(options)
 						fresh.overview = newOverview(replay.start, replay.end)
 						fresh.signalCap = d.signalCap
+						fresh.hideGeoOverlay = d.hideGeoOverlay
 						fresh.angle, fresh.themeIndex = d.angle, d.themeIndex
 						d = fresh
 						d.advanceReplayRate(replay.start)
@@ -218,6 +220,8 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 			case '1', '2', '3', '4', '5':
 				d.themeIndex = int(key - '1')
 				d.clearScreen = true
+			case 'f', 'F':
+				d.hideGeoOverlay = !d.hideGeoOverlay
 			case ' ':
 				if replay != nil {
 					replay.toggle(time.Now())
@@ -534,11 +538,16 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		}
 	}
 
-	places := append([]geoMarker(nil), d.pending...)
-	places = append(places, d.recent...)
-	globe := renderGlobeWithTraffic(
-		l.GlobeWidth, l.GlobeHeight, d.angle, t, server, d.signals, d.currentSecond, places...,
-	)
+	var globe []string
+	if d.hideGeoOverlay {
+		globe = renderGlobe(l.GlobeWidth, l.GlobeHeight, d.angle, t)
+	} else {
+		places := append([]geoMarker(nil), d.pending...)
+		places = append(places, d.recent...)
+		globe = renderGlobeWithTraffic(
+			l.GlobeWidth, l.GlobeHeight, d.angle, t, server, d.signals, d.currentSecond, places...,
+		)
+	}
 	for i := 0; i < len(globe) && i+1 < l.ContentRows-2; i++ {
 		left[i+1] = globe[i]
 	}
@@ -703,10 +712,14 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 
 	frame = append(frame, fitANSI(t.Muted+strings.Repeat("═", l.Width), l.Width))
 	controls := fitANSI(t.Accent+"[1] MONO  [2] MATRIX  [3] TERMINAL  [4] WESTERN  [5] REVERSE MONO", l.Width)
-	footer := fitANSI(t.UI+"NETWATCH // PRESS Q TO EXIT", l.Width)
+	geoToggle := "[F] Overlay on"
+	if d.hideGeoOverlay {
+		geoToggle = "[F] Overlay off"
+	}
+	footer := fitANSI(t.UI+geoToggle+"  [Q] Exit", l.Width)
 	if replay {
 		controls = withRightLabel(t.Accent+d.replayStatus, "Themes 1-5", t.Accent, l.Width)
-		globe := fmt.Sprintf("GLOBE %dx [g/G] rotation  [<-/->] seek 1m  [Q] exit", d.replayGlobeSpeed)
+		globe := fmt.Sprintf("%s  [g/G] %dx  [<-/->] ±1m  [Q] Exit", geoToggle, d.replayGlobeSpeed)
 		footer = withRightLabel(t.UI+globe, "THEME: "+t.Name, t.Accent, l.Width)
 	}
 	frame = append(frame, controls, footer)
