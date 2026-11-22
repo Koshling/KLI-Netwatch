@@ -15,8 +15,14 @@ import (
 	"netwatch/internal/event"
 )
 
+const feedLimit = 100
+
 type feedEvent struct {
-	event    event.AccessEvent
+	when     time.Time
+	clientIP string
+	method   string
+	url      string
+	status   int
 	category classifier.Category
 }
 
@@ -36,6 +42,7 @@ type Dashboard struct {
 	clients          map[string]classifier.Category
 	classifier       *classifier.Classifier
 	feed             []feedEvent
+	feedStart        int
 	angle            float64
 	statusCounts     [5]int
 
@@ -427,10 +434,21 @@ func (d *Dashboard) add(e event.AccessEvent) {
 		d.statusCounts[4]++
 	}
 
-	d.feed = append(d.feed, feedEvent{event: e, category: category})
-	if len(d.feed) > 100 {
-		d.feed = d.feed[len(d.feed)-100:]
+	item := feedEvent{
+		when: e.Time, clientIP: e.ClientIP, method: e.Method,
+		url: e.URL, status: e.Status, category: category,
 	}
+	if len(d.feed) < feedLimit {
+		d.feed = append(d.feed, item)
+	} else {
+		d.feed[d.feedStart] = item
+		d.feedStart = (d.feedStart + 1) % feedLimit
+	}
+}
+
+// feedAt indexes the retained requests from oldest to newest.
+func (d *Dashboard) feedAt(index int) feedEvent {
+	return d.feed[(d.feedStart+index)%len(d.feed)]
 }
 
 func (d *Dashboard) updateRate(now time.Time) {
@@ -593,9 +611,8 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 			continue
 		}
 
-		item := d.feed[index]
-		e := item.event
-		path := []rune(printableField(e.URL))
+		item := d.feedAt(index)
+		path := []rune(printableField(item.url))
 
 		if len(path) > pathWidth {
 			if pathWidth > 3 {
@@ -616,10 +633,10 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		put(fmt.Sprintf(
 			"%s%-8s %-7s %-6s %-3d %s\033[0m",
 			color,
-			e.Time.Format("15:04:05"),
+			item.when.Format("15:04:05"),
 			item.category,
-			printableField(e.Method),
-			e.Status,
+			printableField(item.method),
+			item.status,
 			string(path),
 		))
 	}

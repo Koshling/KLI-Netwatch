@@ -207,13 +207,13 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		default:
 			j := len(d.feed) - 1 - (i - height - 3)
 			if j >= 0 {
-				e := d.feed[j].event
-				l = fmt.Sprintf("%s %3d %s", e.Time.Format("15:04:05"), e.Status, strings.Map(func(r rune) rune {
+				e := d.feedAt(j)
+				l = fmt.Sprintf("%s %3d %s", e.when.Format("15:04:05"), e.status, strings.Map(func(r rune) rune {
 					if r < 32 || r > 126 {
 						return '?'
 					}
 					return r
-				}, e.ClientIP))
+				}, e.clientIP))
 			}
 		}
 		r := ""
