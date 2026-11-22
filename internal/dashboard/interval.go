@@ -3,6 +3,8 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ type overview struct {
 	world      [90][180]int
 	timeline   [120]int
 	located    int
+	routes     bool
 }
 
 func newOverview(start, end time.Time) *overview { return &overview{start: start, end: end} }
@@ -73,6 +76,10 @@ func (d *Dashboard) showOverview(ctx context.Context, keys <-chan byte, skipped 
 			if !ok || k == 'q' || k == 'Q' {
 				return nil
 			}
+			if (k == 'l' || k == 'L') && d.geoOptions.ServerSet {
+				d.overview.routes = !d.overview.routes
+				d.clearScreen = true
+			}
 			if k >= '1' && k <= '5' {
 				d.themeIndex = int(k - '1')
 				d.clearScreen = true
@@ -106,6 +113,16 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	for y, line := range o.world {
 		for x, n := range line {
 			grid[(y*height/90)*left+x*left/180] += n
+		}
+	}
+	serverCell := -1
+	var routes []bool
+	if d.geoOptions.ServerSet {
+		sx := min(179, max(0, int((d.geoOptions.ServerLongitude+180)/2))) * left / 180
+		sy := min(89, max(0, int((90-d.geoOptions.ServerLatitude)/2))) * height / 90
+		serverCell = sy*left + sx
+		if o.routes {
+			routes = overviewRoutes(grid, left, height, serverCell)
 		}
 	}
 	lines := []string{t.Accent + "REQUESTS / TIME"}
@@ -142,10 +159,14 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 			for x := 0; x < left; x++ {
 				n := grid[(i-1)*left+x]
 				switch {
+				case (i-1)*left+x == serverCell:
+					b.WriteString(t.Accent + "S")
 				case n >= 10:
 					b.WriteString(t.Accent + "@")
 				case n > 0:
 					b.WriteString(t.Data + "*")
+				case routes != nil && routes[(i-1)*left+x]:
+					b.WriteString(t.Muted + ".")
 				case isLand((float64(x)+0.5)*360/float64(left)-180, 90-(float64(i)-0.5)*180/float64(height)):
 					b.WriteString(t.Muted + "░")
 				default:
@@ -155,6 +176,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 			l = b.String()
 		case i == height+1:
 			l = t.Data + "* 1-9   @ 10+ requests"
+			if serverCell >= 0 { l += "   S server" }
 		case i == height+2:
 			l = t.Accent + "RECENT REQUESTS"
 
@@ -178,7 +200,13 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	}
 	put(h-3, t.UI+fmt.Sprintf("Requests %d   Clients %d   Mapped %d   Skipped lines %d", d.total, len(d.clients), o.located, skipped))
 	put(h-2, t.Muted+strings.Repeat("═", w))
-	put(h-1, t.Accent+"[1-5] Themes   "+t.Name+"   [Q] Exit")
+	controls := "[Q] Exit   [1-5] Themes   " + t.Name
+	if serverCell >= 0 {
+		state := "off"
+		if o.routes { state = "on" }
+		controls = "[L] Lines " + state + "   " + controls
+	}
+	put(h-1, t.Accent+controls)
 	return rows
 }
 func peakIfTraffic(peak, total int) int {
@@ -186,4 +214,30 @@ func peakIfTraffic(peak, total int) int {
 		return 0
 	}
 	return peak
+}
+
+// Draw routes from the busiest visible cells, wrapping across the date line.
+func overviewRoutes(grid []int, width, height, server int) []bool {
+	var sources []int
+	for cell, count := range grid {
+		if count > 0 && cell != server {
+			sources = append(sources, cell)
+		}
+	}
+	sort.SliceStable(sources, func(i, j int) bool { return grid[sources[i]] > grid[sources[j]] })
+	mask := make([]bool, len(grid))
+	for _, cell := range sources[:min(len(sources), signalLimit(width,height))] {
+		x, y := cell%width, cell/width
+		dx, dy := server%width-x, server/width-y
+		if dx > width/2 { dx -= width }
+		if dx < -width/2 { dx += width }
+		steps := max(dx, -dx, dy, -dy)
+		for i := 1; i < steps; i++ {
+			f := float64(i)/float64(steps)
+			col := (width+x+int(math.Round(float64(dx)*f)))%width
+			row := y+int(math.Round(float64(dy)*f))
+			mask[row*width+col] = true
+		}
+	}
+	return mask
 }
