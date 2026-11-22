@@ -2,6 +2,7 @@ package dashboard
 
 type Theme struct {
 	Name       string
+	Traffic    string
 	UI         string
 	Data       string
 	Accent     string
@@ -20,6 +21,7 @@ var themes = []Theme{
 	},
 	{
 		Name:       "MATRIX",
+		Traffic:    "\033[96m",
 		UI:         "\033[37m",
 		Data:       "\033[32m",
 		Accent:     "\033[1;92m",
@@ -28,6 +30,7 @@ var themes = []Theme{
 	},
 	{
 		Name:       "TERMINAL",
+		Traffic:    "\033[97m",
 		UI:         "\033[32m",
 		Data:       "\033[32m",
 		Accent:     "\033[1;92m",
@@ -36,6 +39,7 @@ var themes = []Theme{
 	},
 	{
 		Name:       "WESTERN",
+		Traffic:    "\033[38;5;68m",
 		UI:         "\033[37m",
 		Data:       "\033[33m",
 		Accent:     "\033[1;93m",

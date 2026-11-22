@@ -64,7 +64,7 @@ func TestReplayEventUpdatesGlobe(t *testing.T) {
 		clients:    make(map[string]classifier.Category),
 		classifier: classifier.New(),
 		geoOptions: GeoOptions{Resolver: resolver},
-		geoSeen:    make(map[string]bool),
+		geoSeen:    make(map[string]*geoKey),
 		geoMarkers: make(map[geoKey]int),
 	}
 	start := time.Unix(100, 0)
@@ -72,6 +72,13 @@ func TestReplayEventUpdatesGlobe(t *testing.T) {
 	d.add(event.AccessEvent{Time: start, ClientIP: "8.8.8.8", Status: 200})
 	d.advanceReplayRate(start.Add(time.Second))
 	d.add(event.AccessEvent{Time: start.Add(time.Second), ClientIP: "8.8.8.8", Status: 200})
+	summary := newDashboard(d.geoOptions)
+	summary.intervalOnly = true
+	summary.overview = newOverview(start, start.Add(time.Minute))
+	summary.add(event.AccessEvent{Time: start, ClientIP: "8.8.8.8", Status: 200})
+	if summary.overview.located != 1 || len(summary.pending) != 0 || len(summary.geoSeen) != 0 {
+		t.Fatal("interval scan must aggregate mapped traffic without tracking globe sources")
+	}
 	const want = 1
 	if len(d.geoMarkers) != want {
 		t.Fatalf("replay globe marker count = %d, want %d", len(d.geoMarkers), want)
@@ -170,20 +177,38 @@ func TestReplayFrameFits80x24(t *testing.T) {
 			}
 		}
 		if !strings.HasSuffix(strings.TrimRight(frame[22], " "), "Themes 1-5") || !strings.HasSuffix(strings.TrimRight(frame[23], " "), "THEME: "+theme.Name) ||
-			!strings.Contains(frame[22], "[+/-] speed") || !strings.Contains(frame[23], "[Q] exit") {
+			!strings.Contains(frame[22], "[+/-] speed") || !strings.Contains(frame[23], "[Q] Exit") {
 			t.Fatalf("theme %s: footer controls or labels missing", theme.Name)
 		}
 	}
 }
 
-func TestLiveFooterAndFeedRemainUnchanged(t *testing.T) {
+func TestLiveFooterAndFeed(t *testing.T) {
 	d := newDashboard(GeoOptions{})
 	frame, _ := d.frame(80, 24)
 	if !strings.Contains(frame[2], "LIVE EVENT FEED") {
 		t.Fatal("Live event feed title changed")
 	}
 	if !strings.Contains(frame[22], "[1] MONO") ||
-		!strings.Contains(frame[23], "NETWATCH // PRESS Q TO EXIT") {
+		!strings.Contains(frame[23], "[Q] Exit") {
 		t.Fatal("Live footer changed")
+	}
+}
+
+func TestOverlayFooterInLiveAndReplay(t *testing.T) {
+	d := newDashboard(GeoOptions{})
+	for _, status := range []string{"", "REPLAY"} {
+		d.replayStatus = status
+		for _, hidden := range []bool{false, true} {
+			d.hideGeoOverlay = hidden
+			want := "[F] Overlay on"
+			if hidden {
+				want = "[F] Overlay off"
+			}
+			rows, _ := d.frame(80, 24)
+			if !strings.Contains(rows[23], want) {
+				t.Fatalf("status %q: missing %q in footer", status, want)
+			}
+		}
 	}
 }

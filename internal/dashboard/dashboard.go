@@ -45,13 +45,19 @@ type Dashboard struct {
 
 	themeIndex  int
 	clearScreen bool
+	hideGeoOverlay bool
+	intervalOnly bool
 	prevFrame   []string
 	prevWidth   int
 	prevHeight  int
 
 	geoOptions GeoOptions
-	geoSeen    map[string]bool
+	geoSeen    map[string]*geoKey
 	geoMarkers map[geoKey]int
+	signals    []geoMarker
+	signalCap  int
+	pending []geoMarker
+	recent []geoMarker
 }
 
 func Run(ctx context.Context, events <-chan event.AccessEvent) error {
@@ -69,13 +75,15 @@ func newDashboard(options GeoOptions) *Dashboard {
 		rates:       make([]int, 120),
 		clearScreen: true,
 		geoOptions:  options,
-		geoSeen:     make(map[string]bool),
+		geoSeen:     make(map[string]*geoKey),
 		geoMarkers:  make(map[geoKey]int),
 	}
 }
 
 func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions, replay *replayClock) error {
 	d := newDashboard(options)
+	layout := calculateLayout(terminalSize())
+	d.signalCap = signalLimit(layout.GlobeWidth, layout.GlobeHeight)
 	var stream *replayStream
 	if replay != nil {
 		stream = replay.openStream(ctx)
@@ -120,6 +128,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				input = events
 			}
 			if !replay.seeking {
+				d.signals, d.pending, d.recent = nil, nil, nil
 				shown = replay.target
 				// Use the target to vary the turn and keep each jump clearly visible.
 				degrees := 90 + uint64(shown.Unix())%181
@@ -200,6 +209,8 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 						replay.skipped = 0
 						fresh := newDashboard(options)
 						fresh.overview = newOverview(replay.start, replay.end)
+						fresh.signalCap = d.signalCap
+						fresh.hideGeoOverlay = d.hideGeoOverlay
 						fresh.angle, fresh.themeIndex = d.angle, d.themeIndex
 						d = fresh
 						d.advanceReplayRate(replay.start)
@@ -210,6 +221,8 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 			case '1', '2', '3', '4', '5':
 				d.themeIndex = int(key - '1')
 				d.clearScreen = true
+			case 'f', 'F':
+				d.hideGeoOverlay = !d.hideGeoOverlay
 			case ' ':
 				if replay != nil {
 					replay.toggle(time.Now())
@@ -240,7 +253,8 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				break
 			}
 			if replay == nil || !replay.paused {
-				step := 0.035
+				d.advanceSignals()
+				step := globeStep
 				if replay != nil {
 					step *= float64(replay.globeSpeed())
 				}
@@ -356,13 +370,13 @@ func keyboardInput() (<-chan byte, func()) {
 }
 
 func (d *Dashboard) add(e event.AccessEvent) {
+	category := d.classifier.Classify(e)
 	if d.overview != nil {
-		d.overview.record(e, d.geoOptions)
+		d.overview.record(e, d.geoOptions, category)
 	}
 	d.total++
 	d.currentCount++
 
-	category := d.classifier.Classify(e)
 	if e.ClientIP != "" {
 		previous := d.clients[e.ClientIP]
 		if category != previous {
@@ -381,15 +395,18 @@ func (d *Dashboard) add(e event.AccessEvent) {
 			d.clients[e.ClientIP] = category
 		}
 
-		if d.geoOptions.Resolver != nil && !d.geoSeen[e.ClientIP] {
-			d.geoSeen[e.ClientIP] = true
-			loc := d.geoOptions.Resolver.Lookup(e.ClientIP)
-			if loc.Found {
-				key := geoKey{
-					latitude:  int(loc.Latitude * 100),
-					longitude: int(loc.Longitude * 100),
+		if !d.intervalOnly && d.geoOptions.Resolver != nil {
+			key, seen := d.geoSeen[e.ClientIP]
+			if !seen {
+				loc := d.geoOptions.Resolver.Lookup(e.ClientIP)
+				if loc.Found {
+					key = &geoKey{latitude: int(loc.Latitude * 100), longitude: int(loc.Longitude * 100)}
+					d.geoMarkers[*key]++
 				}
-				d.geoMarkers[key]++
+				d.geoSeen[e.ClientIP] = key
+			}
+			if key != nil {
+				d.startSignal(*key, e.ClientIP, category, e.Time)
 			}
 		}
 	}
@@ -505,15 +522,15 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 
 	left[0] = t.Accent + "GLOBAL TRAFFIC" + "\033[0m"
 
-	var visitors []geoMarker
-	for key, count := range d.geoMarkers {
-		visitors = append(visitors, geoMarker{
-			Latitude:  float64(key.latitude) / 100,
-			Longitude: float64(key.longitude) / 100,
-			Count:     count,
-		})
+	d.signalCap = signalLimit(l.GlobeWidth, l.GlobeHeight)
+	if len(d.signals) > d.signalCap {
+		for _, signal := range d.signals[d.signalCap:] {
+			d.enqueueSignal(signal, false)
+		}
+		d.signals = d.signals[:d.signalCap]
 	}
 
+	d.scheduleSignals()
 	var server *geoMarker
 	if d.geoOptions.ServerSet {
 		server = &geoMarker{
@@ -522,9 +539,16 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		}
 	}
 
-	globe := renderGlobeWithTraffic(
-		l.GlobeWidth, l.GlobeHeight, d.angle, t, server, visitors,
-	)
+	var globe []string
+	if d.hideGeoOverlay {
+		globe = renderGlobe(l.GlobeWidth, l.GlobeHeight, d.angle, t)
+	} else {
+		places := append([]geoMarker(nil), d.pending...)
+		places = append(places, d.recent...)
+		globe = renderGlobeWithTraffic(
+			l.GlobeWidth, l.GlobeHeight, d.angle, t, server, d.signals, d.currentSecond, places...,
+		)
+	}
 	for i := 0; i < len(globe) && i+1 < l.ContentRows-2; i++ {
 		left[i+1] = globe[i]
 	}
@@ -689,10 +713,14 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 
 	frame = append(frame, fitANSI(t.Muted+strings.Repeat("═", l.Width), l.Width))
 	controls := fitANSI(t.Accent+"[1] MONO  [2] MATRIX  [3] TERMINAL  [4] WESTERN  [5] REVERSE MONO", l.Width)
-	footer := fitANSI(t.UI+"NETWATCH // PRESS Q TO EXIT", l.Width)
+	geoToggle := "[F] Overlay on"
+	if d.hideGeoOverlay {
+		geoToggle = "[F] Overlay off"
+	}
+	footer := fitANSI(t.UI+geoToggle+"  [Q] Exit", l.Width)
 	if replay {
 		controls = withRightLabel(t.Accent+d.replayStatus, "Themes 1-5", t.Accent, l.Width)
-		globe := fmt.Sprintf("GLOBE %dx [g/G] rotation  [<-/->] seek 1m  [Q] exit", d.replayGlobeSpeed)
+		globe := fmt.Sprintf("%s  [g/G] %dx  [<-/->] ±1m  [Q] Exit", geoToggle, d.replayGlobeSpeed)
 		footer = withRightLabel(t.UI+globe, "THEME: "+t.Name, t.Accent, l.Width)
 	}
 	frame = append(frame, controls, footer)
@@ -790,4 +818,102 @@ func (d *Dashboard) rateGraph(height, width int, t Theme) []string {
 	}
 
 	return result
+}
+
+func (d *Dashboard) startSignal(key geoKey, source string, category classifier.Category, seen time.Time) {
+	marker := geoMarker{Latitude: float64(key.latitude)/100, Longitude: float64(key.longitude)/100, Source: source, Category: category, Seen: seen}
+	for i := range d.signals {
+		if d.signals[i].samePlace(marker) {
+			d.signals[i].Seen = seen
+		}
+	}
+	for i := range d.recent {
+		if d.recent[i].samePlace(marker) {
+			d.recent[i].Seen = seen
+			d.recent[i].Category = category
+			break
+		}
+	}
+	d.enqueueSignal(marker, true)
+}
+
+func (d *Dashboard) enqueueSignal(marker geoMarker, newRequest bool) {
+	marker.Age = 0
+	for i, queued := range d.pending {
+		if queued.Source == marker.Source {
+			// A displaced pulse predates the request already waiting for this IP.
+			if newRequest {
+				d.pending[i] = marker
+			}
+			return
+		}
+	}
+	if len(d.pending) < 512 {
+		d.pending = append(d.pending, marker)
+	}
+}
+
+func (d *Dashboard) scheduleSignals() {
+	recent := d.recent[:0]
+	for _, marker := range d.recent {
+		if d.currentSecond.Sub(marker.Seen) < 30*time.Second {
+			recent = append(recent, marker)
+		}
+	}
+	d.recent = recent
+	waiting := d.pending[:0]
+	for _, marker := range d.pending {
+		if !marker.Seen.IsZero() && d.currentSecond.Sub(marker.Seen) >= 2*time.Minute {
+			continue
+		}
+		active := false
+		for _, signal := range d.signals {
+			if signal.Source == marker.Source {
+				active = true
+				break
+			}
+		}
+		if active || len(d.signals) >= d.signalCap || !marker.canLaunch(d.angle, max(1, d.replayGlobeSpeed)) {
+			waiting = append(waiting, marker)
+			continue
+		}
+		d.signals = append(d.signals, marker)
+		for i, old := range d.recent {
+			if old.samePlace(marker) {
+				d.recent = append(d.recent[:i], d.recent[i+1:]...)
+				break
+			}
+		}
+		d.recent = append(d.recent, marker)
+	}
+	d.pending = waiting
+}
+
+func (d *Dashboard) advanceSignals() {
+	active := d.signals[:0]
+	for _, signal := range d.signals {
+		signal.Age++
+		if signal.Age < signalFrames {
+			active = append(active, signal)
+		}
+	}
+	d.signals = active
+}
+
+const globeStep = 0.035
+
+// Reserve a short visibility window so a queued source cannot spend its
+// first frames grazing the silhouette as the globe rotates away.
+func (m geoMarker) canLaunch(angle float64, rotationSpeed int) bool {
+	lat := m.Latitude * math.Pi / 180
+	lon := m.Longitude * math.Pi / 180 + angle
+	height := math.Sin(lat) * math.Sin(globeTilt)
+	radius := math.Cos(lat) * math.Cos(globeTilt)
+	for frame := 0; frame < 3; frame++ {
+		depth := height + radius*math.Cos(lon+float64(frame*rotationSpeed)*globeStep)
+		if depth < 0.4 {
+			return false
+		}
+	}
+	return true
 }
