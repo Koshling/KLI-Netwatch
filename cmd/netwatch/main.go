@@ -19,6 +19,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "geoip" {
+		os.Exit(runGeoIPCLI(os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	configPath := flag.String("config", "configs/netwatch.json", "configuration file")
 	mode := flag.String("mode", "live", "live, replay or interval")
 	logPath := flag.String("log", "", "historical log (defaults to access_log)")

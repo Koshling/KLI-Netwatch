@@ -13,7 +13,6 @@ Requires Go 1.26.10 or a compatible newer toolchain.
 go test ./...
 go vet ./...
 go build -o netwatch ./cmd/netwatch
-go build -o netwatch-geoip-convert ./cmd/netwatch-geoip-convert
 ```
 
 ## Configuration
@@ -37,14 +36,14 @@ Replay and interval modes:
 ./netwatch -mode replay -from 2026-11-22T10:00:00+03:00 -to 2026-11-22T11:00:00+03:00
 ```
 
-The log file must be readable by your user. These flags use historical access logs; GeoIP is optional.
+The log file must be readable by your user. These flags use historical access logs; GeoIP is optional. The `geoip convert` subcommand does not require a monitor configuration file.
 
 ## GeoIP
 
-The IP2Location LITE GeoIP database is **not included** and must be obtained separately according to its provider's terms. The bundled `netwatch-geoip-convert` utility can convert supported CSV data to NETWATCH's NWGEO binary format:
+The IP2Location LITE GeoIP database is **not included** and must be obtained separately according to its provider's terms. The `netwatch` binary also includes GeoIP conversion; no separate converter executable is required. Convert supported CSV data to NETWATCH's NWGEO binary format:
 
 ```sh
-./netwatch-geoip-convert -input path/to/IPV4.csv -output data/ipv4.nwgeo -family 4
+./netwatch geoip convert -input path/to/IPV4.csv -output data/ipv4.nwgeo -family 4
 ```
 
 Configure `geoip_ipv4_db` and/or `geoip_ipv6_db` in your local configuration to enable geographic lookups. Database files, logs and machine-specific config are intentionally excluded from this repository.
