@@ -37,3 +37,15 @@ func TestIntervalOverview(t *testing.T) {
 		}
 	}
 }
+func TestShortOverviewClients(t *testing.T) {
+	d := newDashboard(GeoOptions{})
+	d.overview = newOverview(time.Unix(0, 0), time.Unix(60, 0))
+	for h := 18; h <= 21; h++ {
+		frame := strings.Join(d.overviewRows(60, h, 0, map[classifier.Category]int{classifier.User: 7, classifier.Bot: 2, classifier.Threat: 1}), "\n")
+		for _, label := range []string{"USER 7", "BOT 2", "THREAT 1"} {
+			if !strings.Contains(frame, label) {
+				t.Errorf("height %d missing %s", h, label)
+			}
+		}
+	}
+}

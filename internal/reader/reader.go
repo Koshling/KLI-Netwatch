@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -45,6 +46,9 @@ func (r *Reader) Follow(
 	var identity os.FileInfo
 	var pending []byte
 	var dropping bool
+	// Remember a small suffix so truncation is detectable after rapid regrowth.
+	const suffixSize = 64
+	suffix := make([]byte, 0, suffixSize)
 	initialized := false
 
 	closeFile := func(flush bool) error {
@@ -59,6 +63,7 @@ func (r *Reader) Follow(
 			file = nil
 		}
 
+		suffix = suffix[:0]
 		identity = nil
 		pending = nil
 		dropping = false
@@ -70,13 +75,19 @@ func (r *Reader) Follow(
 	}()
 
 	buffer := make([]byte, 32768)
-	readAvailable := func() error {
-
+	readAvailable := func(available io.Reader) error {
 		for {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			n, err := file.Read(buffer)
+			n, err := available.Read(buffer)
+			if n >= suffixSize {
+				suffix = append(suffix[:0], buffer[n-suffixSize:n]...)
+			} else if n > 0 {
+				keep := min(len(suffix), suffixSize-n)
+				copy(suffix, suffix[len(suffix)-keep:])
+				suffix = append(suffix[:keep], buffer[:n]...)
+			}
 
 			for _, b := range buffer[:n] {
 				if b == '\n' {
@@ -149,11 +160,14 @@ func (r *Reader) Follow(
 					return err
 				}
 				if offset > 0 {
-					var last [1]byte
-					if _, err := file.ReadAt(last[:], offset-1); err != nil && !errors.Is(err, io.EOF) {
+					length := min(offset, int64(suffixSize))
+					suffix = suffix[:length]
+					n, err := file.ReadAt(suffix, offset-length)
+					if err != nil && err != io.EOF {
 						return err
 					}
-					dropping = last[0] != '\n'
+					suffix = suffix[:n]
+					dropping = n > 0 && suffix[n-1] != '\n'
 				}
 			}
 
@@ -163,7 +177,7 @@ func (r *Reader) Follow(
 
 		pathInfo, err := os.Stat(r.Path)
 		if err == nil && !os.SameFile(identity, pathInfo) {
-			if err := readAvailable(); err != nil {
+			if err := readAvailable(file); err != nil {
 				return err
 			}
 			if err := closeFile(true); err != nil {
@@ -172,22 +186,38 @@ func (r *Reader) Follow(
 			continue
 		}
 
+		var available io.Reader = file
 		if err == nil {
 			offset, seekErr := file.Seek(0, io.SeekCurrent)
 			if seekErr != nil {
 				return seekErr
 			}
 
-			if pathInfo.Size() < offset {
+			rewritten := pathInfo.Size() < offset
+			if !rewritten && len(suffix) > 0 {
+				var probe [suffixSize]byte
+				n, err := file.ReadAt(probe[:len(suffix)], offset-int64(len(suffix)))
+				if err != nil && err != io.EOF {
+					return err
+				}
+				rewritten = !bytes.Equal(suffix, probe[:n])
+			}
+			if rewritten {
+				suffix = suffix[:0]
 				if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
 					return seekErr
 				}
 				pending = nil
 				dropping = false
+				offset = 0
 			}
+			if pathInfo.Size() == offset {
+				continue
+			}
+			available = io.LimitReader(file, pathInfo.Size()-offset)
 		}
 
-		if err := readAvailable(); err != nil {
+		if err := readAvailable(available); err != nil {
 			return err
 		}
 	}

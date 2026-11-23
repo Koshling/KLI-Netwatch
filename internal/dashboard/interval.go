@@ -150,10 +150,18 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		bins[j] += n
 		peak = max(peak, bins[j])
 	}
-	for level := 3; level >= 1; level-- {
+	levels := 3
+	if h < 21 {
+		levels = 1
+		lines[0] = fmt.Sprintf("Peak %d / bin", peakIfTraffic(peak, d.total))
+	}
+	for level := levels; level >= 1; level-- {
 		var b strings.Builder
 		for _, n := range bins {
-			if n > 0 && (3*n+peak-1)/peak >= level {
+			if levels == 1 && n > 0 {
+				const bars = "▁▂▃▄▅▆▇█"
+				b.WriteRune([]rune(bars)[(int64(n)*8-1)/int64(peak)])
+			} else if n > 0 && (3*n+peak-1)/peak >= level {
 				b.WriteRune('█')
 			} else {
 				b.WriteRune('·')
@@ -161,7 +169,10 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		}
 		lines = append(lines, t.Data+b.String())
 	}
-	lines = append(lines, fmt.Sprintf("Peak %d / bin", peakIfTraffic(peak, d.total)), t.Accent+"HTTP STATUS")
+	if levels > 1 {
+		lines = append(lines, fmt.Sprintf("Peak %d / bin", peakIfTraffic(peak, d.total)))
+	}
+	lines = append(lines, t.Accent+"HTTP STATUS")
 	for i, name := range []string{"2xx", "3xx", "4xx", "5xx", "other"} {
 		lines = append(lines, fmt.Sprintf("%-5s %d", name, d.statusCounts[i]))
 	}

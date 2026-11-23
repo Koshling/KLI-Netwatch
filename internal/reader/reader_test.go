@@ -232,3 +232,26 @@ func TestTailStartup(t *testing.T) {
 		}
 	}
 }
+func TestTruncateAndRegrow(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "log")
+	if err := os.WriteFile(p, []byte("old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var lines []string
+	err := New(p, 100, time.Millisecond).Follow(ctx, false, func(line string) error {
+		lines = append(lines, line)
+		if line == "old" {
+			return os.WriteFile(p, []byte("new longer line\n"), 0600)
+		}
+		cancel()
+		return nil
+	})
+	if err != nil && err != context.Canceled {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || lines[1] != "new longer line" {
+		t.Fatal(lines)
+	}
+}
