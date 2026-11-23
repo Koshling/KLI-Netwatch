@@ -226,10 +226,9 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 					replay.target, replay.seeking = target, true
 				}
 			case '1', '2', '3', '4', '5':
-				if next := int(key - '1'); next != d.themeIndex {
-					d.themeIndex = next
-					d.clearScreen = true
-				}
+				// Reapply the theme background to the live summary after a partial update.
+				d.themeIndex = int(key - '1')
+				d.clearScreen = true
 			case 'f', 'F':
 				d.hideGeoOverlay = !d.hideGeoOverlay
 			case ' ':
