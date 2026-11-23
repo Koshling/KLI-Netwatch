@@ -10,8 +10,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/rivo/uniseg"
-
 	"netwatch/internal/classifier"
 	"netwatch/internal/event"
 )
@@ -464,35 +462,6 @@ func printableField(s string) string {
 	}, s)
 }
 
-// clipField keeps a displayed character and its combining marks together.
-func clipField(s string, width int, ellipsis bool) string {
-	ascii := len(s) == utf8.RuneCountInString(s)
-	if len(s) <= width && ascii {
-		return s
-	}
-	if !ascii && uniseg.StringWidth(s) <= width {
-		return s
-	}
-	suffix := ""
-	if ellipsis && width > 3 {
-		width -= 3
-		suffix = "..."
-	}
-	if ascii {
-		return s[:width] + suffix
-	}
-	end := 0
-	clusters := uniseg.NewGraphemes(s)
-	for clusters.Next() {
-		width -= clusters.Width()
-		if width < 0 {
-			break
-		}
-		_, end = clusters.Positions()
-	}
-	return s[:end] + suffix
-}
-
 func fitANSI(s string, width int) string {
 	var b strings.Builder
 	visible := 0
@@ -608,7 +577,6 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		pathWidth = 1
 	}
 
-	feedStartRow := row
 	for i := 0; i < l.FeedRows; i++ {
 		index := len(d.feed) - 1 - i
 		if index < 0 {
@@ -617,7 +585,15 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		}
 
 		item := d.feedAt(index)
-		path := clipField(printableField(item.url), pathWidth, true)
+		path := []rune(printableField(item.url))
+
+		if len(path) > pathWidth {
+			if pathWidth > 3 {
+				path = append(path[:pathWidth-3], '.', '.', '.')
+			} else {
+				path = path[:pathWidth]
+			}
+		}
 
 		color := t.Data
 		switch item.category {
@@ -627,11 +603,15 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 			color = "\033[31m"
 		}
 
-		method := printableField(item.method)
-		method += strings.Repeat(" ", max(0, 6-uniseg.StringWidth(method)))
-		text := fmt.Sprintf("%-8s %-7s %s %-3d %s", item.when.Format("15:04:05"), item.category, method, item.status, path)
-		text = clipField(text, l.RightWidth, false)
-		put(color + text + "\033[0m" + strings.Repeat(" ", l.RightWidth-uniseg.StringWidth(text)))
+		put(fmt.Sprintf(
+			"%s%-8s %-7s %-6s %-3d %s\033[0m",
+			color,
+			item.when.Format("15:04:05"),
+			item.category,
+			printableField(item.method),
+			item.status,
+			string(path),
+		))
 	}
 	put(t.Muted + strings.Repeat("─", l.RightWidth-2) + "\033[0m")
 	put(t.Accent + "REQUEST RATE / SEC" + "\033[0m")
@@ -717,10 +697,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 
 	for i := 0; i < l.ContentRows; i++ {
 		leftLine := fitANSI(left[i], l.LeftWidth)
-		rightLine := right[i]
-		if i < feedStartRow || i >= feedStartRow+l.FeedRows || rightLine == "" {
-			rightLine = fitANSI(rightLine, l.RightWidth)
-		}
+		rightLine := fitANSI(right[i], l.RightWidth)
 		frame = append(frame, leftLine+t.Muted+" │ "+t.UI+rightLine)
 	}
 
