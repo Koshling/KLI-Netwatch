@@ -70,11 +70,13 @@ func (d *Dashboard) showOverview(ctx context.Context, keys <-chan byte, skipped 
 	for _, category := range d.clients {
 		counts[category]++
 	}
+	dirty := true
 	tick := time.NewTicker(350 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		w, h := terminalSize()
-		if d.clearScreen || w != d.prevWidth || h != d.prevHeight {
+		if dirty || d.clearScreen || w != d.prevWidth || h != d.prevHeight {
+			dirty = false
 			rows := d.overviewRows(w, h, skipped, counts)
 			if err := d.writeFrame(rows, Layout{Width: w, Height: h}, themes[d.themeIndex]); err != nil {
 				return err
@@ -89,9 +91,9 @@ func (d *Dashboard) showOverview(ctx context.Context, keys <-chan byte, skipped 
 			}
 			if (k == 'l' || k == 'L') && d.geoOptions.ServerSet {
 				d.overview.routes = (d.overview.routes + 1) % 4
-				d.clearScreen = true
+				dirty = true
 			}
-			if k >= '1' && k <= '5' {
+			if k >= '1' && k <= '5' && int(k-'1') != d.themeIndex {
 				d.themeIndex = int(k - '1')
 				d.clearScreen = true
 			}

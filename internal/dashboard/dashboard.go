@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"math"
@@ -227,8 +226,10 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 					replay.target, replay.seeking = target, true
 				}
 			case '1', '2', '3', '4', '5':
-				d.themeIndex = int(key - '1')
-				d.clearScreen = true
+				if next := int(key - '1'); next != d.themeIndex {
+					d.themeIndex = next
+					d.clearScreen = true
+				}
 			case 'f', 'F':
 				d.hideGeoOverlay = !d.hideGeoOverlay
 			case ' ':
@@ -733,16 +734,18 @@ var reverseMonoSpans = strings.NewReplacer(
 )
 
 func (d *Dashboard) writeFrame(frame []string, l Layout, t Theme) error {
-	fullRedraw := d.clearScreen ||
-		d.prevWidth != l.Width ||
+	geometryChanged := d.prevWidth != l.Width ||
 		d.prevHeight != l.Height ||
 		len(d.prevFrame) != len(frame)
 
+	fullRedraw := d.clearScreen || geometryChanged
 	var b strings.Builder
 
 	if fullRedraw {
 		b.WriteString(t.Background)
-		b.WriteString("\033[2J")
+		if geometryChanged || len(frame) < l.Height {
+			b.WriteString("\033[2J")
+		}
 	}
 
 	for i, line := range frame {
@@ -761,11 +764,10 @@ func (d *Dashboard) writeFrame(frame []string, l Layout, t Theme) error {
 		b.WriteString("\033[0m")
 	}
 
-	writer := bufio.NewWriter(os.Stdout)
-	if _, err := writer.WriteString(b.String()); err != nil {
-		return err
+	if b.Len() == 0 {
+		return nil
 	}
-	if err := writer.Flush(); err != nil {
+	if _, err := os.Stdout.WriteString(b.String()); err != nil {
 		return err
 	}
 
