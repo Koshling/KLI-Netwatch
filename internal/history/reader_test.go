@@ -26,3 +26,20 @@ func TestSnapshotInterval(t *testing.T) {
 		t.Fatal(count, skipped, err)
 	}
 }
+
+func TestLineLimitExcludesTerminator(t *testing.T) {
+	start := time.Unix(100, 0)
+	const base = `{"remote_addr":"8.8.8.8","time":"1970-01-01T00:01:40Z","status":200}`
+	for _, limit := range []int{1024, 4095, 4096, 8191} {
+		line := base + strings.Repeat(" ", limit-len(base))
+		p := filepath.Join(t.TempDir(), "log")
+		if err := os.WriteFile(p, []byte(line+"\r\n"+line+" \r\n"+line+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		skipped, err := Scan(context.Background(), p, "json", limit, start, start.Add(time.Minute), func(event.AccessEvent) error { n++; return nil })
+		if err != nil || n != 2 || skipped != 1 {
+			t.Errorf("limit %d: got %d, skipped %d, err %v", limit, n, skipped, err)
+		}
+	}
+}

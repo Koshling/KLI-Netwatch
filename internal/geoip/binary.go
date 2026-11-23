@@ -110,7 +110,7 @@ func ConvertCSV(source, destination string, family int) (retErr error) {
 		}
 		start, err := decimalIP(strings.TrimSpace(row[0]), family == 6)
 		if err != nil {
-			if line == 1 {
+			if line == 1 && rangeHeader(row) {
 				continue
 			}
 			return fmt.Errorf("CSV row %d: start: %w", line, err)
@@ -130,7 +130,7 @@ func ConvertCSV(source, destination string, family int) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("CSV row %d: longitude: %w", line, err)
 		}
-		if math.IsNaN(lat) || math.IsInf(lat, 0) || math.IsNaN(lon) || math.IsInf(lon, 0) || lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		if !validCoordinates(lat, lon) {
 			return fmt.Errorf("CSV row %d: coordinates out of range", line)
 		}
 		var metadata []byte
@@ -318,6 +318,11 @@ func (r *BinaryResolver) Lookup(rawIP string) Location {
 	if bytes.Compare(rec[:16], key[:]) > 0 {
 		return Location{}
 	}
+	lat := math.Float64frombits(binary.LittleEndian.Uint64(rec[32:40]))
+	lon := math.Float64frombits(binary.LittleEndian.Uint64(rec[40:48]))
+	if !validCoordinates(lat, lon) {
+		return Location{}
+	}
 	offset := binary.LittleEndian.Uint64(rec[48:56])
 	length := binary.LittleEndian.Uint32(rec[56:60])
 	size := uint64(length)
@@ -345,5 +350,5 @@ func (r *BinaryResolver) Lookup(rawIP string) Location {
 	if pos != len(payload) {
 		return Location{}
 	}
-	return Location{CountryCode: fields[0], Country: fields[1], Region: fields[2], City: fields[3], Latitude: math.Float64frombits(binary.LittleEndian.Uint64(rec[32:40])), Longitude: math.Float64frombits(binary.LittleEndian.Uint64(rec[40:48])), Found: true}
+	return Location{CountryCode: fields[0], Country: fields[1], Region: fields[2], City: fields[3], Latitude: lat, Longitude: lon, Found: true}
 }

@@ -60,7 +60,9 @@ func ScanSnapshot(ctx context.Context, f *os.File, size int64, format string, li
 		if complete {
 			part = part[:len(part)-1]
 		}
-		if len(part) > limit-len(line) {
+		// One trailing CR may occupy an extra byte, even across ReadSlice chunks.
+		remaining := limit - len(line)
+		if len(part) > 0 && len(part) > remaining && (len(part)-1 != remaining || part[len(part)-1] != '\r') {
 			oversized = true
 		}
 		if !oversized {

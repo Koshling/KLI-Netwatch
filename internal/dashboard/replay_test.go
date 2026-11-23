@@ -34,13 +34,13 @@ func TestReplayClockPauseAndSpeed(t *testing.T) {
 func TestReplayRateGap(t *testing.T) {
 	start := time.Unix(100, 0)
 	d := Dashboard{rates: make([]int, 4)}
-	d.advanceReplayRate(start)
+	d.updateRate(start)
 	d.currentCount = 7
-	d.advanceReplayRate(start.Add(3 * time.Second))
+	d.updateRate(start.Add(3 * time.Second))
 	if d.rates[1] != 7 || d.rates[3] != 0 || d.currentCount != 0 {
 		t.Fatalf("rates = %v, active count = %d", d.rates, d.currentCount)
 	}
-	d.advanceReplayRate(start.Add(time.Hour))
+	d.updateRate(start.Add(time.Hour))
 	for _, count := range d.rates {
 		if count != 0 {
 			t.Fatalf("rates after long gap = %v", d.rates)
@@ -68,9 +68,9 @@ func TestReplayEventUpdatesGlobe(t *testing.T) {
 		geoMarkers: make(map[geoKey]int),
 	}
 	start := time.Unix(100, 0)
-	d.advanceReplayRate(start)
+	d.updateRate(start)
 	d.add(event.AccessEvent{Time: start, ClientIP: "8.8.8.8", Status: 200})
-	d.advanceReplayRate(start.Add(time.Second))
+	d.updateRate(start.Add(time.Second))
 	d.add(event.AccessEvent{Time: start.Add(time.Second), ClientIP: "8.8.8.8", Status: 200})
 	summary := newDashboard(d.geoOptions)
 	summary.intervalOnly = true
@@ -100,14 +100,14 @@ func TestSeekMatchesChronologicalPass(t *testing.T) {
 		{Time: target.Add(time.Second), ClientIP: "9.9.9.9", Status: 500},
 	}
 	want := newDashboard(GeoOptions{})
-	want.advanceReplayRate(start)
+	want.updateRate(start)
 	for _, e := range rows[:3] {
-		want.advanceReplayRate(e.Time)
+		want.updateRate(e.Time)
 		want.add(e)
 	}
-	want.advanceReplayRate(target)
+	want.updateRate(target)
 	rebuilt := newDashboard(GeoOptions{})
-	rebuilt.advanceReplayRate(start)
+	rebuilt.updateRate(start)
 	c := replayClock{start: start, end: start.Add(time.Hour), target: target, seeking: true, paused: true}
 	for i := range rows {
 		if consumed := rebuilt.catchUp(&c, &rows[i], start); consumed != (i < 3) {
@@ -210,5 +210,25 @@ func TestOverlayFooterInLiveAndReplay(t *testing.T) {
 				t.Fatalf("status %q: missing %q in footer", status, want)
 			}
 		}
+	}
+}
+
+func TestLiveGeoPointCount(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v4.csv")
+	if err := os.WriteFile(p, []byte("134744064,134744319,US,US,CA,LA,34,-118\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := geoip.Open(p, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resolver.Close()
+	d := newDashboard(GeoOptions{Resolver: resolver})
+	for _, ip := range []string{"8.8.8.1", "8.8.8.2", "127.0.0.1"} {
+		d.add(event.AccessEvent{ClientIP: ip, Time: time.Unix(100, 0), Status: 200})
+	}
+	frame, _ := d.frame(120, 30)
+	if !strings.Contains(strings.Join(frame, "\n"), "GEO POINTS: 1") {
+		t.Fatal("expected one distinct mapped location")
 	}
 }

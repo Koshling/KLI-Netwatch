@@ -118,7 +118,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 
 	var pending *event.AccessEvent
 	if replay != nil {
-		d.advanceReplayRate(replay.anchor)
+		d.updateRate(replay.anchor)
 	}
 	input := events
 	var ready <-chan time.Time
@@ -154,7 +154,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 		}
 		select {
 		case <-ready:
-			d.advanceReplayRate(pending.Time)
+			d.updateRate(pending.Time)
 			d.add(*pending)
 			shown = pending.Time
 			pending = nil
@@ -183,6 +183,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				pending = &e
 				input = nil
 			} else {
+				d.updateRate(time.Now())
 				d.add(e)
 			}
 
@@ -220,7 +221,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 						fresh.hideGeoOverlay = d.hideGeoOverlay
 						fresh.angle, fresh.themeIndex = d.angle, d.themeIndex
 						d = fresh
-						d.advanceReplayRate(replay.start)
+						d.updateRate(replay.start)
 					}
 					endSince = time.Time{}
 					replay.target, replay.seeking = target, true
@@ -283,7 +284,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				}
 				if !replay.seeking && ((pending != nil && pending.Time.After(position)) || replay.sourceDone) {
 					shown = position
-					d.advanceReplayRate(position)
+					d.updateRate(position)
 				}
 				d.replayStatus = replay.status(d.currentSecond)
 				d.replayGlobeSpeed = replay.globeSpeed()
@@ -451,30 +452,6 @@ func (d *Dashboard) feedAt(index int) feedEvent {
 	return d.feed[(d.feedStart+index)%len(d.feed)]
 }
 
-func (d *Dashboard) updateRate(now time.Time) {
-	second := now.Truncate(time.Second)
-
-	if d.currentSecond.IsZero() {
-		d.currentSecond = second
-		return
-	}
-
-	if second.After(d.currentSecond) {
-		steps := int(second.Sub(d.currentSecond) / time.Second)
-		if steps > len(d.rates) {
-			steps = len(d.rates)
-		}
-
-		for i := 0; i < steps; i++ {
-			d.rates = append(d.rates[1:], 0)
-		}
-
-		d.rates[len(d.rates)-1] = d.currentCount
-		d.currentCount = 0
-		d.currentSecond = second
-	}
-}
-
 // Input from access logs is plain terminal text, including in JSON mode.
 func printableField(s string) string {
 	return strings.Map(func(r rune) rune {
@@ -571,11 +548,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		left[i+1] = globe[i]
 	}
 
-	geoPointCount := len(d.geoSeen)
-	if replay {
-		geoPointCount = len(d.geoMarkers)
-	}
-	left[l.ContentRows-2] = t.Muted + geoStatus(d.geoOptions, geoPointCount) + "\033[0m"
+	left[l.ContentRows-2] = t.Muted + geoStatus(d.geoOptions, len(d.geoMarkers)) + "\033[0m"
 	serverText := "SERVER: NOT CONFIGURED"
 	if d.geoOptions.ServerSet {
 		serverText = fmt.Sprintf("SERVER: %.2f, %.2f",

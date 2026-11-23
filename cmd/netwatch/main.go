@@ -31,6 +31,10 @@ func main() {
 	toFlag := flag.String("to", "", "replay end (RFC3339, exclusive)")
 	interval := flag.String("interval", "", "overview: duration or RFC3339-from/RFC3339-to")
 	flag.Parse()
+	if flag.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "unexpected argument: %q\n", flag.Arg(0))
+		os.Exit(2)
+	}
 	if *interval != "" || *mode == "interval" {
 		if *mode != "live" && *mode != "interval" {
 			fmt.Fprintln(os.Stderr, "--interval conflicts with --mode", *mode)
@@ -75,7 +79,7 @@ func main() {
 		}
 	})
 	if *mode == "live" && (*logPath != "" || explicitLast || *fromFlag != "" || *toFlag != "") {
-		fmt.Fprintln(os.Stderr, "historical options require --mode replay")
+		fmt.Fprintln(os.Stderr, "historical options require --mode replay or interval")
 		os.Exit(2)
 	}
 
@@ -96,7 +100,7 @@ func main() {
 	if cfg.GeoIPIPv4DB != "" || cfg.GeoIPIPv6DB != "" {
 		resolver, err = geoip.Open(cfg.GeoIPIPv4DB, cfg.GeoIPIPv6DB)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "GeoIP disabled: %v\\n", err)
+			fmt.Fprintf(os.Stderr, "GeoIP disabled: %v\n", err)
 			resolver = nil
 		}
 	}

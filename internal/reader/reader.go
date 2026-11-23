@@ -94,7 +94,7 @@ func (r *Reader) Follow(
 					continue
 				}
 
-				if len(pending) >= maxSize {
+				if len(pending) > maxSize || (len(pending) == maxSize && b != '\r') {
 					pending = pending[:0]
 					dropping = true
 					continue
@@ -127,6 +127,8 @@ func (r *Reader) Follow(
 			opened, err := os.Open(r.Path)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
+					// A log created after this poll contains only new data.
+					initialized = true
 					continue
 				}
 				return err
@@ -142,8 +144,16 @@ func (r *Reader) Follow(
 			identity = info
 
 			if !initialized && fromEnd {
-				if _, err := file.Seek(0, io.SeekEnd); err != nil {
+				offset, err := file.Seek(0, io.SeekEnd)
+				if err != nil {
 					return err
+				}
+				if offset > 0 {
+					var last [1]byte
+					if _, err := file.ReadAt(last[:], offset-1); err != nil && !errors.Is(err, io.EOF) {
+						return err
+					}
+					dropping = last[0] != '\n'
 				}
 			}
 
