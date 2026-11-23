@@ -57,11 +57,20 @@ func classifyEvent(e event.AccessEvent, state *clientState, now time.Time) Categ
 	// Учитываем её только вместе с серией ответов 403/404.
 	// Only the most recent 40 timestamps can establish the threshold.
 	stamp := now.UnixNano()
-	if len(state.requests) > 0 {
-		last := (state.next + len(state.requests) - 1) % len(state.requests)
-		if stamp-state.requests[last] > int64(10*time.Second) {
-			state.requests = state.requests[:0]
-			state.next = 0
+	if n := len(state.requests); n > 0 {
+		last := (state.next + n - 1) % n
+		if expired(stamp, state.requests[last]) {
+			allExpired := true
+			for _, previous := range state.requests {
+				if !expired(stamp, previous) {
+					allExpired = false
+					break
+				}
+			}
+			if allExpired {
+				state.requests = state.requests[:0]
+				state.next = 0
+			}
 		}
 	}
 	if len(state.requests) < 40 {
@@ -70,8 +79,18 @@ func classifyEvent(e event.AccessEvent, state *clientState, now time.Time) Categ
 		state.requests[state.next] = stamp
 		state.next = (state.next + 1) % 40
 	}
-	if len(state.requests) == 40 && state.requests[state.next] >= stamp-int64(10*time.Second) && (e.Status == 403 || e.Status == 404) {
-		return Threat
+	if len(state.requests) == 40 && (e.Status == 403 || e.Status == 404) {
+		// Log entries may arrive out of order. Check both ends of the window.
+		burst := true
+		for _, previous := range state.requests {
+			if previous > stamp || expired(stamp, previous) {
+				burst = false
+				break
+			}
+		}
+		if burst {
+			return Threat
+		}
 	}
 
 	ua := strings.ToLower(e.UserAgent)
@@ -82,6 +101,10 @@ func classifyEvent(e event.AccessEvent, state *clientState, now time.Time) Categ
 	}
 
 	return User
+}
+
+func expired(now, previous int64) bool {
+	return previous <= now && uint64(now)-uint64(previous) > uint64(10*time.Second)
 }
 
 func priority(c Category) int {

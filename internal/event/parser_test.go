@@ -84,3 +84,9 @@ func TestMalformedLines(t *testing.T) {
 		t.Error("expected error parse error")
 	}
 }
+
+func TestErrorPIDOverflow(t *testing.T) {
+	if _, err := ParseError("2026/11/22 11:00:00 [error] 999999999999999999999999#0: example"); err == nil {
+		t.Fatal("accepted PID overflow")
+	}
+}

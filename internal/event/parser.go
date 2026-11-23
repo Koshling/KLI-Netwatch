@@ -207,7 +207,10 @@ func ParseError(line string) (ErrorEvent, error) {
 		return ErrorEvent{}, err
 	}
 
-	pid, _ := strconv.Atoi(match[3])
+	pid, err := strconv.Atoi(match[3])
+	if err != nil {
+		return ErrorEvent{}, fmt.Errorf("invalid PID: %w", err)
+	}
 
 	return ErrorEvent{
 		Time:       timestamp,

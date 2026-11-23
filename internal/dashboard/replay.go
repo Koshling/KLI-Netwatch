@@ -83,12 +83,12 @@ func (c *replayClock) seekTarget(position time.Time, step time.Duration) time.Ti
 // The first event after target belongs to normal playback and stays pending.
 func (d *Dashboard) catchUp(c *replayClock, pending *event.AccessEvent, now time.Time) bool {
 	if pending != nil && !pending.Time.After(c.target) {
-		d.advanceReplayRate(pending.Time)
+		d.updateRate(pending.Time)
 		d.add(*pending)
 		return true
 	}
 	if pending != nil || c.sourceDone {
-		d.advanceReplayRate(c.target)
+		d.updateRate(c.target)
 		c.anchor, c.wall, c.seeking = c.target, now, false
 	}
 	return false
@@ -145,7 +145,7 @@ func (c *replayClock) status(processed time.Time) string {
 	return fmt.Sprintf("REPLAY %s %s %dx [SPACE] pause [+/-] speed | skipped %d", state, processed.Format("15:04:05"), c.speed(), c.skipped)
 }
 
-func (d *Dashboard) advanceReplayRate(now time.Time) {
+func (d *Dashboard) updateRate(now time.Time) {
 	second := now.Truncate(time.Second)
 	if d.currentSecond.IsZero() {
 		d.currentSecond = second

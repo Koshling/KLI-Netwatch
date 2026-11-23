@@ -26,3 +26,24 @@ func TestTrafficWindowBoundary(t *testing.T) {
 		}
 	}
 }
+func TestDelayedError(t *testing.T) {
+	c := New()
+	e := event.AccessEvent{ClientIP: "8.8.8.8", Status: 200, Time: time.Unix(100, 0)}
+	for range 39 {
+		c.Classify(e)
+	}
+	e.Time = e.Time.Add(-time.Minute)
+	e.Status = 404
+	if c.Classify(e) != User {
+		t.Fatal("future requests counted")
+	}
+	e.Time = time.Unix(100, 0)
+	for range 39 {
+		if c.Classify(e) != User {
+			t.Fatal("expired request inside ring counted")
+		}
+	}
+	if c.Classify(e) != Threat {
+		t.Fatal("missed genuine burst")
+	}
+}

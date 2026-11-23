@@ -12,10 +12,13 @@ import (
 	"netwatch/internal/event"
 )
 
+// Allocate latitude bands only where requests have been located.
+const densityBandHeight = 15
+
 // Fixed grids keep the map and timeline independent of the request count.
 type overview struct {
 	start, end time.Time
-	world      [90][180]density
+	world      [90 / densityBandHeight]*[densityBandHeight][180]density
 	timeline   [120]int
 	located    int
 	routes     int
@@ -38,7 +41,11 @@ func (o *overview) record(e event.AccessEvent, opts GeoOptions, category classif
 	index := 0
 	if category == classifier.Bot { index = 1 }
 	if category == classifier.Threat { index = 2 }
-	o.world[y][x][index]++
+	band := y / densityBandHeight
+	if o.world[band] == nil {
+		o.world[band] = new([densityBandHeight][180]density)
+	}
+	o.world[band][y%densityBandHeight][x][index]++
 	o.located++
 }
 
@@ -63,11 +70,13 @@ func (d *Dashboard) showOverview(ctx context.Context, keys <-chan byte, skipped 
 	for _, category := range d.clients {
 		counts[category]++
 	}
+	dirty := true
 	tick := time.NewTicker(350 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		w, h := terminalSize()
-		if d.clearScreen || w != d.prevWidth || h != d.prevHeight {
+		if dirty || d.clearScreen || w != d.prevWidth || h != d.prevHeight {
+			dirty = false
 			rows := d.overviewRows(w, h, skipped, counts)
 			if err := d.writeFrame(rows, Layout{Width: w, Height: h}, themes[d.themeIndex]); err != nil {
 				return err
@@ -82,9 +91,9 @@ func (d *Dashboard) showOverview(ctx context.Context, keys <-chan byte, skipped 
 			}
 			if (k == 'l' || k == 'L') && d.geoOptions.ServerSet {
 				d.overview.routes = (d.overview.routes + 1) % 4
-				d.clearScreen = true
+				dirty = true
 			}
-			if k >= '1' && k <= '5' {
+			if k >= '1' && k <= '5' && int(k-'1') != d.themeIndex {
 				d.themeIndex = int(k - '1')
 				d.clearScreen = true
 			}
@@ -114,9 +123,15 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	height := min(h-11, max(6, left/4))
 	landMaskOnce.Do(buildLandMask)
 	grid := make([]density, left*height)
-	for y, line := range o.world {
-		for x, n := range line {
-			grid[(y*height/90)*left+x*left/180].add(n)
+	for bandIndex, band := range o.world {
+		if band == nil {
+			continue
+		}
+		for row := range band {
+			y := bandIndex*densityBandHeight + row
+			for x, n := range band[row] {
+				grid[(y*height/90)*left+x*left/180].add(n)
+			}
 		}
 	}
 	serverCell := -1
@@ -137,10 +152,18 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		bins[j] += n
 		peak = max(peak, bins[j])
 	}
-	for level := 3; level >= 1; level-- {
+	levels := 3
+	if h < 21 {
+		levels = 1
+		lines[0] = fmt.Sprintf("Peak %d / bin", peakIfTraffic(peak, d.total))
+	}
+	for level := levels; level >= 1; level-- {
 		var b strings.Builder
 		for _, n := range bins {
-			if n > 0 && (3*n+peak-1)/peak >= level {
+			if levels == 1 && n > 0 {
+				const bars = "▁▂▃▄▅▆▇█"
+				b.WriteRune([]rune(bars)[(int64(n)*8-1)/int64(peak)])
+			} else if n > 0 && (3*n+peak-1)/peak >= level {
 				b.WriteRune('█')
 			} else {
 				b.WriteRune('·')
@@ -148,7 +171,10 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		}
 		lines = append(lines, t.Data+b.String())
 	}
-	lines = append(lines, fmt.Sprintf("Peak %d / bin", peakIfTraffic(peak, d.total)), t.Accent+"HTTP STATUS")
+	if levels > 1 {
+		lines = append(lines, fmt.Sprintf("Peak %d / bin", peakIfTraffic(peak, d.total)))
+	}
+	lines = append(lines, t.Accent+"HTTP STATUS")
 	for i, name := range []string{"2xx", "3xx", "4xx", "5xx", "other"} {
 		lines = append(lines, fmt.Sprintf("%-5s %d", name, d.statusCounts[i]))
 	}
@@ -194,13 +220,13 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		default:
 			j := len(d.feed) - 1 - (i - height - 3)
 			if j >= 0 {
-				e := d.feed[j].event
-				l = fmt.Sprintf("%s %3d %s", e.Time.Format("15:04:05"), e.Status, strings.Map(func(r rune) rune {
+				e := d.feedAt(j)
+				l = fmt.Sprintf("%s %3d %s", e.when.Format("15:04:05"), e.status, strings.Map(func(r rune) rune {
 					if r < 32 || r > 126 {
 						return '?'
 					}
 					return r
-				}, e.ClientIP))
+				}, e.clientIP))
 			}
 		}
 		r := ""

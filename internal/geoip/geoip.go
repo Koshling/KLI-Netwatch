@@ -159,7 +159,7 @@ func (r *Resolver) loadFile(path string, ipv6 bool) error {
 		start, err := decimalIP(strings.TrimSpace(record[0]), ipv6)
 		if err != nil {
 			// Some CSV exports include a header row.
-			if line == 1 {
+			if line == 1 && rangeHeader(record) {
 				continue
 			}
 			return fmt.Errorf("CSV line %d: invalid ip_from: %w", line, err)
@@ -183,7 +183,7 @@ func (r *Resolver) loadFile(path string, ipv6 bool) error {
 		if err != nil {
 			return fmt.Errorf("CSV line %d: invalid longitude: %w", line, err)
 		}
-		if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		if !validCoordinates(lat, lon) {
 			return fmt.Errorf("CSV line %d: coordinates out of range", line)
 		}
 
@@ -212,6 +212,16 @@ func (r *Resolver) loadFile(path string, ipv6 bool) error {
 	}
 
 	return nil
+}
+
+func rangeHeader(row []string) bool {
+	first := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(row[0], "\uFEFF")))
+	last := strings.ToLower(strings.TrimSpace(row[1]))
+	return (first == "start" && last == "end") || (first == "ip_from" && last == "ip_to") || (first == "from" && last == "to")
+}
+
+func validCoordinates(lat, lon float64) bool {
+	return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
 }
 
 func decimalIP(value string, ipv6 bool) ([16]byte, error) {
