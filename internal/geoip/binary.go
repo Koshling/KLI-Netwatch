@@ -3,6 +3,7 @@ package geoip
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/csv"
 	"errors"
@@ -45,7 +46,11 @@ type BinaryResolver struct {
 // ConvertCSV converts a sorted eight-column decimal-range CSV to NWGEO v1.
 // It writes into a temporary file and publishes the output only on success.
 // Source and destination must be distinct paths. family must be 4 or 6.
-func ConvertCSV(source, destination string, family int) (retErr error) {
+func ConvertCSV(source, destination string, family int) error {
+	return convertCSV(context.Background(), source, destination, family)
+}
+
+func convertCSV(ctx context.Context, source, destination string, family int) error {
 	if family != 4 && family != 6 {
 		return fmt.Errorf("family must be 4 or 6")
 	}
@@ -97,6 +102,9 @@ func ConvertCSV(source, destination string, family int) (retErr error) {
 	havePrev := false
 	line := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		row, err := cr.Read()
 		if err == io.EOF {
 			break

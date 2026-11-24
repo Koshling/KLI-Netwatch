@@ -23,7 +23,22 @@ func main() {
 		os.Exit(runGeoIPCLI(os.Args[2:], os.Stdout, os.Stderr))
 	}
 
-	configPath := flag.String("config", "configs/netwatch.json", "configuration file")
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		fs := flag.NewFlagSet("netwatch setup", flag.ExitOnError)
+		path := fs.String("config", "", "configuration file (defaults to automatic discovery)")
+		fs.Parse(os.Args[2:])
+		if fs.NArg() != 0 {
+			fs.Usage()
+			os.Exit(2)
+		}
+		if _, err := runSetup(*path, true, false, os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "Setup error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	configPath := flag.String("config", "", "configuration file (defaults to automatic discovery)")
 	mode := flag.String("mode", "live", "live, replay or interval")
 	logPath := flag.String("log", "", "historical log (defaults to access_log)")
 	last := flag.Duration("last", 15*time.Minute, "replay duration when explicit bounds are absent")
@@ -83,7 +98,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := runSetup(*configPath, false, terminal(os.Stdin) && terminal(os.Stdout), os.Stdin, os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
 		os.Exit(1)
@@ -95,6 +110,10 @@ func main() {
 		syscall.SIGTERM,
 	)
 	defer stop()
+
+	if cfg.GeoIPSource == "db-ip" {
+		fmt.Fprintln(os.Stderr, geoip.DBIPAttribution)
+	}
 
 	var resolver *geoip.Resolver
 	if cfg.GeoIPIPv4DB != "" || cfg.GeoIPIPv6DB != "" {
