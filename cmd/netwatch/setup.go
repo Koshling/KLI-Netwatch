@@ -202,12 +202,12 @@ func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) erro
 	if target, err := filepath.EvalSymlinks(configPath); err == nil {
 		configPath = target
 	}
-	v4, v6 := findGeoIP(filepath.Dir(configPath), dataDir, "data")
-	label := "Download DB-IP Lite? (y/n/never/path)"
+	v4, v6, source := findGeoIP(filepath.Dir(configPath), dataDir, "data")
+	label := "Download DB-IP Lite for GeoIP? (y/n/never/path)"
 	fallback := "Y"
 	if v4 != "" || v6 != "" {
 		fmt.Fprintf(p.out, "Found GeoIP databases (IPv4: %s, IPv6: %s)\n", v4, v6)
-		label = "GeoIP (auto = use detected files, y = download, n = skip, never, path)"
+		label = "GeoIP (auto = use detected files, y = download DB-IP Lite, n = skip, never, path)"
 		fallback = "auto"
 	}
 	for {
@@ -221,12 +221,8 @@ func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) erro
 				fmt.Fprintln(p.out, "No usable GeoIP databases found in the standard locations.")
 				continue
 			}
-			cfg.GeoIPIPv4DB, cfg.GeoIPIPv6DB, cfg.GeoIPPrompt = v4, v6, false
-			if v4 != "" && v6 != "" {
-				if _, err := os.Stat(filepath.Join(filepath.Dir(v4), "ATTRIBUTION.txt")); err == nil {
-					cfg.GeoIPSource = "db-ip"
-				}
-			}
+			cfg.GeoIPIPv4DB, cfg.GeoIPIPv6DB = v4, v6
+			cfg.GeoIPSource, cfg.GeoIPPrompt = source, false
 			return nil
 		case "path":
 			return p.enterGeoPaths(cfg, v4, v6)
@@ -244,41 +240,39 @@ func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) erro
 	}
 }
 
-func findGeoIP(dirs ...string) (v4, v6 string) {
+func findGeoIP(dirs ...string) (v4, v6, source string) {
 	for _, dir := range dirs {
 		if a, b := findGeoIPPair(dir); a != "" || b != "" {
-			return a, b
+			return a, b, ""
 		}
 		entries, _ := os.ReadDir(dir)
 		for _, entry := range entries {
-			if entry.IsDir() && strings.HasPrefix(entry.Name(), "dbip-") {
-				subdir := filepath.Join(dir, entry.Name())
-				if _, err := os.Stat(filepath.Join(subdir, "ATTRIBUTION.txt")); err != nil {
-					continue
-				}
-				if a, b := findGeoIPPair(subdir); a != "" && b != "" {
-					return a, b
-				}
+			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "dbip-") {
+				continue
+			}
+			subdir := filepath.Join(dir, entry.Name())
+			if _, err := os.Stat(filepath.Join(subdir, "ATTRIBUTION.txt")); err != nil {
+				continue
+			}
+			if a, b := findGeoIPPair(subdir); a != "" && b != "" {
+				return a, b, "db-ip"
 			}
 		}
 	}
-	return "", ""
+	return "", "", ""
 }
 
 func findGeoIPPair(dir string) (v4, v6 string) {
-	for _, name := range []string{"ipv4.nwgeo", "ipv4.csv"} {
-		if path, err := checkedGeoPath(filepath.Join(dir, name), 4); err == nil {
-			v4 = path
-			break
+	find := func(family int) string {
+		for _, extension := range []string{".nwgeo", ".csv"} {
+			name := fmt.Sprintf("ipv%d%s", family, extension)
+			if path, err := checkedGeoPath(filepath.Join(dir, name), family); err == nil {
+				return path
+			}
 		}
+		return ""
 	}
-	for _, name := range []string{"ipv6.nwgeo", "ipv6.csv"} {
-		if path, err := checkedGeoPath(filepath.Join(dir, name), 6); err == nil {
-			v6 = path
-			break
-		}
-	}
-	return v4, v6
+	return find(4), find(6)
 }
 
 func checkedGeoPath(text string, family int) (string, error) {

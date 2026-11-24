@@ -88,7 +88,7 @@ func TestGeoIPDownloadDefaultShowsLicenseBeforeDownload(t *testing.T) {
 		t.Fatalf("expected setup to wait for detail selection, got %v", err)
 	}
 	prompt := out.String()
-	choice := strings.Index(prompt, "Download DB-IP Lite? (y/n/never/path) [Y]")
+	choice := strings.Index(prompt, "Download DB-IP Lite for GeoIP? (y/n/never/path) [Y]")
 	license := strings.Index(prompt, "CC BY")
 	detail := strings.Index(prompt, "GeoIP detail [1]")
 	if choice < 0 || license <= choice || detail <= license {

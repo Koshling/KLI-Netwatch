@@ -48,6 +48,7 @@ func downloadDBIP(ctx context.Context, dataDir, detail, baseURL string, now time
 		if err != nil {
 			return "", err
 		}
+		req.Header.Set("Accept-Encoding", "identity")
 		resp, err := client.Do(req)
 		if err != nil {
 			return "", err

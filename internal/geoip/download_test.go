@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -67,8 +68,16 @@ func TestDownloadDBIPInstallsBothFamilies(t *testing.T) {
 					t.Fatalf("unexpected cities: IPv4 %+v, IPv6 %+v", v4, v6)
 				}
 			}
-			if _, err := os.Stat(filepath.Join(dir, "ATTRIBUTION.txt")); err != nil {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
 				t.Fatal(err)
+			}
+			var names []string
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			if !slices.Equal(names, []string{"ATTRIBUTION.txt", "ipv4.nwgeo", "ipv6.nwgeo"}) {
+				t.Fatalf("unexpected installed files: %v", names)
 			}
 		})
 	}
