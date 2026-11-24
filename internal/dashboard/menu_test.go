@@ -35,9 +35,21 @@ func TestTerminalNavigationKeys(t *testing.T) {
 	}
 }
 
+func TestMenuPrefersTwoByTwo(t *testing.T) {
+	for _, tc := range []struct{ width, height, columns int }{
+		{38, 13, 2}, {80, 20, 2}, {160, 24, 2}, {220, 55, 2},
+		{160, 12, 4}, {37, 30, 1}, {18, 23, 1},
+		{40, 12, 0}, {160, 7, 0}, {17, 40, 0},
+	} {
+		if got := menuColumns(tc.width, tc.height); got != tc.columns {
+			t.Errorf("%dx%d: got %d columns, want %d", tc.width, tc.height, got, tc.columns)
+		}
+	}
+}
+
 func TestMenuAtCompactAndCardSizes(t *testing.T) {
 	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
-	for _, size := range [][2]int{{12, 1}, {20, 3}, {36, 10}, {38, 13}, {76, 8}, {100, 28}, {160, 44}, {61, 30}} {
+	for _, size := range [][2]int{{12, 1}, {20, 3}, {36, 10}, {38, 13}, {76, 8}, {100, 28}, {160, 44}, {61, 30}, {26, 30}, {18, 23}} {
 		w, h := size[0], size[1]
 		columns := menuColumns(w, h)
 		theme := themes[1]
@@ -48,7 +60,7 @@ func TestMenuAtCompactAndCardSizes(t *testing.T) {
 			}
 			for _, row := range rows {
 				cells := utf8.RuneCountInString(ansi.ReplaceAllString(row, ""))
-				if cells > w || (columns > 1 && cells != w && row != "") {
+				if cells > w || (columns > 0 && cells != w && row != "") {
 					t.Fatalf("%dx%d: row overflow %q", w, h, row)
 				}
 			}
@@ -57,7 +69,7 @@ func TestMenuAtCompactAndCardSizes(t *testing.T) {
 			if !strings.Contains(ansi.ReplaceAllString(text, ""), label[:min(len(label), w)]) {
 				t.Fatalf("%dx%d: selection %s is hidden", w, h, card.title)
 			}
-			if columns > 1 && !strings.Contains(text, theme.Accent+"┌") {
+			if columns > 0 && !strings.Contains(text, theme.Accent+"┌") {
 				t.Fatalf("%dx%d: selected card border is missing the theme accent", w, h)
 			}
 		}
@@ -134,8 +146,8 @@ func TestMenuPreviewsAnimate(t *testing.T) {
 			t.Errorf("%s preview did not change", card.mode)
 		}
 	}
-	compact := menuRows(24, 7, 1, 0, 0, "", theme)
-	if strings.Join(compact, "\n") != strings.Join(menuRows(24, 7, 1, 0, 5, "", theme), "\n") {
+	compact := menuRows(24, 7, 0, 0, 0, "", theme)
+	if strings.Join(compact, "\n") != strings.Join(menuRows(24, 7, 0, 0, 5, "", theme), "\n") {
 		t.Fatal("compact menu should be static")
 	}
 }

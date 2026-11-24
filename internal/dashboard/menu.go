@@ -129,16 +129,17 @@ func (s *Session) Menu(ctx context.Context, previous LaunchOptions, problem erro
 	return LaunchOptions{}, false, nil
 }
 
+// Prefer a 2×2 grid whenever two rows and columns of cards fit.
 func menuColumns(width, height int) int {
 	switch {
-	case width >= 76 && width < 140 && height >= 22:
+	case width >= 38 && height >= 13:
 		return 2
 	case width >= 76 && height >= 8:
 		return 4
-	case width >= 38 && height >= 13:
-		return 2
-	default:
+	case width >= 18 && height >= 23:
 		return 1
+	default:
+		return 0 // Compact text list.
 	}
 }
 
@@ -166,7 +167,7 @@ func menuRows(width, height, columns, selected, frame int, note string, t Theme)
 			footer = "↑↓ / Enter / S / Q"
 		}
 	}
-	if columns == 1 {
+	if columns == 0 {
 		var items []string
 		for i, card := range modeCards {
 			items = append(items, menuChoice(card.title, i == selected, t))
