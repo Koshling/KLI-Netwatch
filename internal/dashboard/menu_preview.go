@@ -6,10 +6,16 @@ import (
 )
 
 func menuPreview(mode Mode, icon string, width, height, frame int, t Theme) []string {
-	if height < 3 {
+	if height < 3 || (mode == convert && width < 13) {
 		rows := make([]string, height)
-		for y := range rows {
-			rows[y] = fitANSI(t.Data+"  "+icon, width)
+		if height > 0 {
+			padding := max(0, (width-len([]rune(icon)))/2)
+			rows[height/2] = fitANSI(t.Data+strings.Repeat(" ", padding)+icon, width)
+			for y, row := range rows {
+				if row == "" {
+					rows[y] = t.Muted + string(previewGrid(width, y))
+				}
+			}
 		}
 		return rows
 	}

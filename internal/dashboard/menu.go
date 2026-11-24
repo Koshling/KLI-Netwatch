@@ -132,7 +132,7 @@ func (s *Session) Menu(ctx context.Context, previous LaunchOptions, problem erro
 // Prefer a 2×2 grid whenever two rows and columns of cards fit.
 func menuColumns(width, height int) int {
 	switch {
-	case width >= 38 && height >= 13:
+	case width >= 26 && height >= 11:
 		return 2
 	case width >= 76 && height >= 8:
 		return 4
@@ -183,16 +183,19 @@ func menuRows(width, height, columns, selected, frame int, note string, t Theme)
 	gridHeight := height - 4 - (groups - 1)
 	gridWidth := width - (columns-1)*gap
 	for index, card := range modeCards {
-		border := t.Muted
-		title := "  " + card.title
-		if index == selected {
-			border = t.Accent
-			title = "> " + card.title
-		}
 		group, column := index/columns, index%columns
 		top := 2 + group + group*gridHeight/groups
 		cardHeight := (group+1)*gridHeight/groups - group*gridHeight/groups
 		cardWidth := (column+1)*gridWidth/columns - column*gridWidth/columns
+
+		label, art := card.title, card.art
+		if card.mode == convert && cardWidth < 17 {
+			label, art = "GEOIP", "TXT → BIN"
+		}
+		border, marker := t.Muted, "  "
+		if index == selected {
+			border, marker = t.Accent, "> "
+		}
 
 		space := ""
 		if column != 0 {
@@ -200,8 +203,8 @@ func menuRows(width, height, columns, selected, frame int, note string, t Theme)
 		}
 		line := strings.Repeat("─", cardWidth-2)
 		rows[top] += space + border + "┌" + line + "┐"
-		rows[top+1] += space + border + "│" + fitANSI(title, cardWidth-2) + "│"
-		for i, preview := range menuPreview(card.mode, card.art, cardWidth-2, cardHeight-3, frame, t) {
+		rows[top+1] += space + border + "│" + fitANSI(marker+label, cardWidth-2) + "│"
+		for i, preview := range menuPreview(card.mode, art, cardWidth-2, cardHeight-3, frame, t) {
 			rows[top+2+i] += space + border + "│" + preview + border + "│"
 		}
 		rows[top+cardHeight-1] += space + border + "└" + line + "┘"

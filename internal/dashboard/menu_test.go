@@ -37,9 +37,9 @@ func TestTerminalNavigationKeys(t *testing.T) {
 
 func TestMenuPrefersTwoByTwo(t *testing.T) {
 	for _, tc := range []struct{ width, height, columns int }{
-		{38, 13, 2}, {80, 20, 2}, {160, 24, 2}, {220, 55, 2},
-		{160, 12, 4}, {37, 30, 1}, {18, 23, 1},
-		{40, 12, 0}, {160, 7, 0}, {17, 40, 0},
+		{26, 11, 2}, {30, 12, 2}, {38, 13, 2}, {80, 20, 2}, {160, 24, 2}, {220, 55, 2},
+		{160, 10, 4}, {25, 30, 1}, {18, 23, 1},
+		{40, 10, 0}, {160, 7, 0}, {17, 40, 0},
 	} {
 		if got := menuColumns(tc.width, tc.height); got != tc.columns {
 			t.Errorf("%dx%d: got %d columns, want %d", tc.width, tc.height, got, tc.columns)
@@ -49,7 +49,7 @@ func TestMenuPrefersTwoByTwo(t *testing.T) {
 
 func TestMenuAtCompactAndCardSizes(t *testing.T) {
 	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
-	for _, size := range [][2]int{{12, 1}, {20, 3}, {36, 10}, {38, 13}, {76, 8}, {100, 28}, {160, 44}, {61, 30}, {26, 30}, {18, 23}} {
+	for _, size := range [][2]int{{12, 1}, {20, 3}, {36, 10}, {38, 13}, {76, 8}, {100, 28}, {160, 44}, {61, 30}, {26, 11}, {26, 30}, {34, 20}, {35, 20}, {18, 23}} {
 		w, h := size[0], size[1]
 		columns := menuColumns(w, h)
 		theme := themes[1]
@@ -66,6 +66,9 @@ func TestMenuAtCompactAndCardSizes(t *testing.T) {
 			}
 			text := strings.Join(rows, "\n")
 			label := "> " + card.title
+			if columns == 2 && w <= 34 && card.mode == convert {
+				label = "> GEOIP"
+			}
 			if !strings.Contains(ansi.ReplaceAllString(text, ""), label[:min(len(label), w)]) {
 				t.Fatalf("%dx%d: selection %s is hidden", w, h, card.title)
 			}
