@@ -414,7 +414,9 @@ func fitANSI(s string, width int) string {
 
 func (d *Dashboard) render() error {
 	frame, layout := d.frame(terminalSize())
-	return d.writeFrame(frame, layout, themes[d.themeIndex])
+	// Dashboard rows already fill the screen width, including trailing spaces.
+	// Overwrite them directly so a terminal never paints a blank row first.
+	return d.writeRows(frame, layout, themes[d.themeIndex], false)
 }
 
 func (d *Dashboard) frame(width, height int) ([]string, Layout) {
@@ -651,6 +653,10 @@ type screen struct {
 }
 
 func (s *screen) writeFrame(frame []string, l Layout, t Theme) error {
+	return s.writeRows(frame, l, t, true)
+}
+
+func (s *screen) writeRows(frame []string, l Layout, t Theme, eraseRows bool) error {
 	geometryChanged := s.prevWidth != l.Width ||
 		s.prevHeight != l.Height ||
 		len(s.prevFrame) != len(frame)
@@ -672,7 +678,9 @@ func (s *screen) writeFrame(frame []string, l Layout, t Theme) error {
 
 		fmt.Fprintf(&b, "\033[%d;1H", i+1)
 		b.WriteString(t.UI)
-		b.WriteString("\033[K")
+		if eraseRows {
+			b.WriteString("\033[K")
+		}
 		if t.Name == "REVERSE MONO" {
 			reverseMonoSpans.WriteString(&b, line)
 		} else {

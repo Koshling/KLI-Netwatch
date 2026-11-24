@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,7 @@ var modeCards = [...]struct {
 }
 
 // Menu returns when a mode is selected, or returns false on quit.
-func (s *Session) Menu(ctx context.Context, previous LaunchOptions, problem error) (LaunchOptions, bool, error) {
+func (s *Session) Menu(ctx context.Context, previous LaunchOptions, configuredLog string, problem error) (LaunchOptions, bool, error) {
 	s.open()
 	var view screen
 	selected := 0
@@ -117,7 +118,7 @@ func (s *Session) Menu(ctx context.Context, previous LaunchOptions, problem erro
 				view = screen{}
 			case 's', 'S':
 				if mode == Replay || mode == Interval {
-					options, accepted, err := s.configureHistory(ctx, mode, previous)
+					options, accepted, err := s.configureHistory(ctx, mode, previous, configuredLog)
 					if accepted || err != nil {
 						return options, accepted, err
 					}
@@ -250,9 +251,9 @@ func menuListRows(width, height int, title string, items []string, selected int,
 	return rows
 }
 
-func (s *Session) configureHistory(ctx context.Context, mode Mode, previous LaunchOptions) (LaunchOptions, bool, error) {
+func (s *Session) configureHistory(ctx context.Context, mode Mode, previous LaunchOptions, configuredLog string) (LaunchOptions, bool, error) {
 	options := LaunchOptions{Mode: mode, Last: DefaultHistoryDuration}
-	rangeText, logPath := DefaultHistoryDuration.String(), ""
+	rangeText, logPath := "", ""
 	if previous.Mode == mode {
 		logPath = previous.LogPath
 		if previous.From != "" || previous.To != "" {
@@ -261,9 +262,12 @@ func (s *Session) configureHistory(ctx context.Context, mode Mode, previous Laun
 			rangeText = previous.Last.String()
 		}
 	}
-	fields := []menuField{{label: "Time range", value: rangeText}, {label: "Log file", value: logPath}}
+	fields := []menuField{
+		{label: "Time range", value: rangeText, placeholder: "00:15"},
+		{label: "Log file", value: logPath, placeholder: configuredLog},
+	}
 	accepted, err := s.runForm(ctx, strings.ToUpper(string(mode))+" SETTINGS", "Start", fields,
-		"Duration (15m, 1h) or RFC3339 start/end. Blank log uses access_log.", "", func() error {
+		"Duration: HH:MM, HH,MM, HHMM, 1h30m, or RFC3339 start/end.", "", func() error {
 			options.LogPath = fields[1].value
 			value := strings.TrimSpace(fields[0].value)
 			options.From, options.To = "", ""
@@ -273,9 +277,9 @@ func (s *Session) configureHistory(ctx context.Context, mode Mode, previous Laun
 					return errors.New("enter both RFC3339 timestamps as start/end")
 				}
 			} else {
-				duration, err := time.ParseDuration(value)
-				if err != nil || duration <= 0 {
-					return errors.New("enter a positive duration or RFC3339 start/end")
+				duration, err := parseHistoryDuration(value)
+				if err != nil {
+					return err
 				}
 				options.Last = duration
 			}
@@ -286,6 +290,29 @@ func (s *Session) configureHistory(ctx context.Context, mode Mode, previous Laun
 			return err
 		})
 	return options, accepted, err
+}
+
+func parseHistoryDuration(value string) (time.Duration, error) {
+	if value == "" {
+		return DefaultHistoryDuration, nil
+	}
+	if duration, err := time.ParseDuration(value); err == nil && duration > 0 {
+		return duration, nil
+	}
+
+	hours, minutes, separated := strings.Cut(strings.Replace(value, ",", ":", 1), ":")
+	if !separated && len(value) == 4 {
+		hours, minutes = value[:2], value[2:]
+	}
+	// ParseDuration enforces duration overflow. Check the minute component
+	// separately so a typo such as 18:90 is not silently carried into hours.
+	if hours != "" && len(minutes) == 2 && strings.Trim(hours+minutes, "0123456789") == "" {
+		minute, _ := strconv.Atoi(minutes)
+		if duration, err := time.ParseDuration(hours + "h" + minutes + "m"); minute < 60 && err == nil && duration > 0 {
+			return duration, nil
+		}
+	}
+	return 0, errors.New("enter a positive duration (HH:MM, HH,MM, HHMM, 1h30m) or RFC3339 start/end")
 }
 
 func (s *Session) convertGeoIP(ctx context.Context) (string, error) {

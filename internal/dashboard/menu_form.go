@@ -8,10 +8,11 @@ import (
 )
 
 type menuField struct {
-	label   string
-	value   string
-	choices []string
-	choice  int
+	label       string
+	value       string
+	placeholder string
+	choices     []string
+	choice      int
 }
 
 func (f *menuField) edit(key rune) {
@@ -43,8 +44,12 @@ func (f menuField) row(width int, selected bool, t Theme) string {
 		value = "< " + f.choices[f.choice] + " >"
 	}
 	if value == "" {
-		value = "(empty)"
+		value = f.placeholder
+		if value == "" {
+			value = "(empty)"
+		}
 	}
+	value = printableField(value)
 	if width-len(label)-2 < 8 {
 		label = ""
 	}

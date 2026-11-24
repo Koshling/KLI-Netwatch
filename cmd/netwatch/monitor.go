@@ -34,7 +34,7 @@ func runMonitor(ctx context.Context, cfg config.Config, geo dashboard.GeoOptions
 			problem = err
 		}
 		var selected bool
-		launch, selected, err = session.Menu(ctx, launch, problem)
+		launch, selected, err = session.Menu(ctx, launch, cfg.AccessLog, problem)
 		if err != nil || !selected {
 			return err
 		}

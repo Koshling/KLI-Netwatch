@@ -154,3 +154,17 @@ func TestMenuPreviewsAnimate(t *testing.T) {
 		t.Fatal("compact menu should be static")
 	}
 }
+
+func TestHistoryDurationInput(t *testing.T) {
+	for value, want := range map[string]time.Duration{
+		"": DefaultHistoryDuration, "18:30": 18*time.Hour + 30*time.Minute,
+		"18,30": 18*time.Hour + 30*time.Minute, "1830": 18*time.Hour + 30*time.Minute,
+		"0130": 90 * time.Minute, "1h30m": 90 * time.Minute, "45s": 45 * time.Second,
+		"00:00": 0, "12:60": 0, "1260": 0, "-1:30": 0, "1:+2": 0, "99999999:10": 0,
+	} {
+		got, err := parseHistoryDuration(value)
+		if got != want || (err != nil) != (want == 0) {
+			t.Errorf("%q got %v (%v), want %v", value, got, err, want)
+		}
+	}
+}

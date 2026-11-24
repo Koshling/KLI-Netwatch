@@ -33,7 +33,7 @@ Use `./netwatch --auto-config` to create a configuration from a readable standar
 
 The regular launch opens Live. Press **M** (`m` or `M`) in Live, Replay or Interval to open **MENU**. Use the arrow keys to select a mode and Enter to open it. Themes **1–5** carry over between screens, and **Q** exits NETWATCH.
 
-Replay and Interval use the configured access log and the last 15 minutes by default. Press **S** on either card to set a different duration, a pair of RFC3339 timestamps separated by `/`, or a different log file. In the settings, use Enter or the down arrow to move to **Start** and Enter to launch. Esc goes back.
+Replay and Interval use the configured access log and the last 15 minutes by default. Press **S** on either card to set a different duration (for example `01:30`, `01,30`, `0130` or `1h30m`), a pair of RFC3339 timestamps separated by `/`, or a different log file. The form shows the configured log path until you type an override. In the settings, use Enter or the down arrow to move to **Start** and Enter to launch. Esc goes back.
 
 **GeoIP Convert** asks for a CSV path, an output path and the IP family. An existing folder, or a new folder path ending in `/`, receives `ipv4.nwgeo` or `ipv6.nwgeo`. Convert returns to the menu after success.
 
