@@ -37,17 +37,18 @@ func TestTerminalNavigationKeys(t *testing.T) {
 
 func TestMenuAtCompactAndCardSizes(t *testing.T) {
 	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
-	for _, size := range [][2]int{{12, 1}, {20, 3}, {36, 10}, {38, 13}, {76, 8}, {100, 28}} {
+	for _, size := range [][2]int{{12, 1}, {20, 3}, {36, 10}, {38, 13}, {76, 8}, {100, 28}, {160, 44}, {61, 30}} {
 		w, h := size[0], size[1]
 		columns := menuColumns(w, h)
 		theme := themes[1]
 		for selected, card := range modeCards {
-			rows := menuRows(w, h, columns, selected, "", theme)
+			rows := menuRows(w, h, columns, selected, 5, "", theme)
 			if len(rows) != h {
 				t.Fatalf("%dx%d: got %d rows", w, h, len(rows))
 			}
 			for _, row := range rows {
-				if utf8.RuneCountInString(ansi.ReplaceAllString(row, "")) > w {
+				cells := utf8.RuneCountInString(ansi.ReplaceAllString(row, ""))
+				if cells > w || (columns > 1 && cells != w && row != "") {
 					t.Fatalf("%dx%d: row overflow %q", w, h, row)
 				}
 			}
@@ -121,5 +122,20 @@ func TestIntervalJoinsScanBeforeReturningToMenu(t *testing.T) {
 	case <-finished:
 	default:
 		t.Fatal("scan is still running")
+	}
+}
+
+func TestMenuPreviewsAnimate(t *testing.T) {
+	theme := themes[0]
+	for _, card := range modeCards {
+		first := strings.Join(menuPreview(card.mode, card.art, 25, 12, 0, theme), "\n")
+		next := strings.Join(menuPreview(card.mode, card.art, 25, 12, 5, theme), "\n")
+		if first == next {
+			t.Errorf("%s preview did not change", card.mode)
+		}
+	}
+	compact := menuRows(24, 7, 1, 0, 0, "", theme)
+	if strings.Join(compact, "\n") != strings.Join(menuRows(24, 7, 1, 0, 5, "", theme), "\n") {
+		t.Fatal("compact menu should be static")
 	}
 }

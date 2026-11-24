@@ -78,11 +78,12 @@ func (s *Session) Menu(ctx context.Context, previous LaunchOptions, problem erro
 	}
 	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
+	frame := 0
 	for ctx.Err() == nil {
 		width, height := terminalSize()
 		t := themes[s.themeIndex]
 		columns := menuColumns(width, height)
-		rows := menuRows(width, height, columns, selected, note, t)
+		rows := menuRows(width, height, columns, selected, frame, note, t)
 		if err := view.writeFrame(rows, Layout{Width: width, Height: height}, t); err != nil {
 			return LaunchOptions{}, false, err
 		}
@@ -90,6 +91,7 @@ func (s *Session) Menu(ctx context.Context, previous LaunchOptions, problem erro
 		select {
 		case <-ctx.Done():
 		case <-tick.C:
+			frame++
 		case key, ok := <-s.keys:
 			if !ok || key == 'q' || key == 'Q' {
 				return LaunchOptions{}, false, nil
@@ -129,6 +131,8 @@ func (s *Session) Menu(ctx context.Context, previous LaunchOptions, problem erro
 
 func menuColumns(width, height int) int {
 	switch {
+	case width >= 76 && width < 140 && height >= 22:
+		return 2
 	case width >= 76 && height >= 8:
 		return 4
 	case width >= 38 && height >= 13:
@@ -149,7 +153,7 @@ func moveModeSelection(selected, columns int, key rune) int {
 	return (selected + step + len(modeCards)) % len(modeCards)
 }
 
-func menuRows(width, height, columns, selected int, note string, t Theme) []string {
+func menuRows(width, height, columns, selected, frame int, note string, t Theme) []string {
 	if note == "" {
 		note = modeCards[selected].description
 	}
@@ -173,7 +177,10 @@ func menuRows(width, height, columns, selected int, note string, t Theme) []stri
 	rows := make([]string, height)
 	rows[0] = fitANSI(t.Accent+"MENU", width)
 	rows[1] = fitANSI(t.Muted+strings.Repeat("═", width), width)
-	cardWidth := (width - (columns-1)*2) / columns
+	const gap = 2
+	groups := len(modeCards) / columns
+	gridHeight := height - 4 - (groups - 1)
+	gridWidth := width - (columns-1)*gap
 	for index, card := range modeCards {
 		border := t.Muted
 		title := "  " + card.title
@@ -181,16 +188,22 @@ func menuRows(width, height, columns, selected int, note string, t Theme) []stri
 			border = t.Accent
 			title = "> " + card.title
 		}
-		top := index/columns*5 + 2
-		gap := ""
-		if index%columns != 0 {
-			gap = "  "
+		group, column := index/columns, index%columns
+		top := 2 + group + group*gridHeight/groups
+		cardHeight := (group+1)*gridHeight/groups - group*gridHeight/groups
+		cardWidth := (column+1)*gridWidth/columns - column*gridWidth/columns
+
+		space := ""
+		if column != 0 {
+			space = strings.Repeat(" ", gap)
 		}
 		line := strings.Repeat("─", cardWidth-2)
-		rows[top] += gap + border + "┌" + line + "┐"
-		rows[top+1] += gap + border + "│" + fitANSI(title, cardWidth-2) + "│"
-		rows[top+2] += gap + border + "│" + fitANSI(t.Data+"  "+card.art, cardWidth-2) + border + "│"
-		rows[top+3] += gap + border + "└" + line + "┘"
+		rows[top] += space + border + "┌" + line + "┐"
+		rows[top+1] += space + border + "│" + fitANSI(title, cardWidth-2) + "│"
+		for i, preview := range menuPreview(card.mode, card.art, cardWidth-2, cardHeight-3, frame, t) {
+			rows[top+2+i] += space + border + "│" + preview + border + "│"
+		}
+		rows[top+cardHeight-1] += space + border + "└" + line + "┘"
 	}
 	rows[height-2] = fitANSI(t.UI+printableField(note), width)
 	rows[height-1] = fitANSI(t.Accent+footer, width)
