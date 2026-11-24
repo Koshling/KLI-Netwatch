@@ -38,7 +38,7 @@ func TestDownloadDBIPInstallsBothFamilies(t *testing.T) {
 
 			// The January archive is absent, so the downloader must cross the year boundary.
 			now := time.Date(2026, time.January, 31, 0, 0, 0, 0, time.UTC)
-			dir, err := downloadDBIP(context.Background(), t.TempDir(), detail, server.URL, now)
+			dir, err := downloadDBIP(context.Background(), t.TempDir(), detail, server.URL, now, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -91,7 +91,7 @@ func TestDownloadDBIPRemovesPartialInstallation(t *testing.T) {
 		gz.Close()
 	}))
 	defer server.Close()
-	if _, err := downloadDBIP(context.Background(), root, "country", server.URL, time.Now()); err == nil {
+	if _, err := downloadDBIP(context.Background(), root, "country", server.URL, time.Now(), nil); err == nil {
 		t.Fatal("expected an incomplete archive to fail")
 	}
 	entries, err := os.ReadDir(root)

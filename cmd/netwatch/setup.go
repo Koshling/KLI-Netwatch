@@ -344,8 +344,11 @@ func (p setupPrompts) downloadGeoIP(cfg *config.Config, dataDir string) error {
 		}
 		fmt.Fprintln(p.out, "Downloading and converting IPv4 and IPv6 databases…")
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		dir, err := geoip.DownloadDBIP(ctx, dataDir, detail)
+		dir, usedSystemDNS, err := geoip.DownloadDBIP(ctx, dataDir, detail)
 		stop()
+		if usedSystemDNS {
+			fmt.Fprintln(p.out, "GeoIP download used the system DNS fallback.")
+		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return err

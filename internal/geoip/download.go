@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,12 +25,16 @@ var countryPointsJSON []byte
 
 // DownloadDBIP installs a pair of NWGEO files in a new directory under dataDir.
 // The completed download can be discovered again if config saving fails.
-func DownloadDBIP(ctx context.Context, dataDir, detail string) (string, error) {
+func DownloadDBIP(ctx context.Context, dataDir, detail string) (dir string, usedSystemDNS bool, err error) {
 	now := time.Now().UTC()
-	return downloadDBIP(ctx, dataDir, detail, "https://download.db-ip.com/free", now)
+	var fallbackUsed atomic.Bool
+	transport := dbipTransport(&fallbackUsed)
+	defer transport.CloseIdleConnections()
+	dir, err = downloadDBIP(ctx, dataDir, detail, "https://download.db-ip.com/free", now, transport)
+	return dir, fallbackUsed.Load(), err
 }
 
-func downloadDBIP(ctx context.Context, dataDir, detail, baseURL string, now time.Time) (string, error) {
+func downloadDBIP(ctx context.Context, dataDir, detail, baseURL string, now time.Time, transport http.RoundTripper) (string, error) {
 	var edition string
 	switch detail {
 	case "country":
@@ -40,7 +45,7 @@ func downloadDBIP(ctx context.Context, dataDir, detail, baseURL string, now time
 		return "", fmt.Errorf("unsupported GeoIP detail %q", detail)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := &http.Client{Timeout: 10 * time.Minute, Transport: transport}
 	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	for attempt := 0; attempt < 2; attempt++ {
 		url := fmt.Sprintf("%s/dbip-%s-lite-%s.csv.gz", baseURL, edition, month.Format("2006-01"))
