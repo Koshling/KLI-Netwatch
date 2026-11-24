@@ -16,6 +16,8 @@ type Config struct {
 	PollInterval         time.Duration
 	GeoIPIPv4DB          string
 	GeoIPIPv6DB          string
+	GeoIPPrompt          bool
+	GeoIPSource          string
 	ServerLatitude       float64
 	ServerLongitude      float64
 	ServerCoordinatesSet bool
@@ -29,6 +31,8 @@ type configFile struct {
 	PollInterval    string   `json:"poll_interval"`
 	GeoIPIPv4DB     string   `json:"geoip_ipv4_db"`
 	GeoIPIPv6DB     string   `json:"geoip_ipv6_db"`
+	GeoIPPrompt     bool     `json:"geoip_prompt,omitempty"`
+	GeoIPSource     string   `json:"geoip_source,omitempty"`
 	ServerLatitude  *float64 `json:"server_latitude"`
 	ServerLongitude *float64 `json:"server_longitude"`
 }
@@ -79,6 +83,8 @@ func Load(path string) (Config, error) {
 	// GeoIP database paths are optional. A single IP family is supported.
 	cfg.GeoIPIPv4DB = file.GeoIPIPv4DB
 	cfg.GeoIPIPv6DB = file.GeoIPIPv6DB
+	cfg.GeoIPPrompt = file.GeoIPPrompt
+	cfg.GeoIPSource = file.GeoIPSource
 
 	// Pointers distinguish omitted coordinates from valid zero values.
 	if (file.ServerLatitude == nil) != (file.ServerLongitude == nil) {

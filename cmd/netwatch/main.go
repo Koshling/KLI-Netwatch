@@ -23,7 +23,23 @@ func main() {
 		os.Exit(runGeoIPCLI(os.Args[2:], os.Stdout, os.Stderr))
 	}
 
-	configPath := flag.String("config", "configs/netwatch.json", "configuration file")
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		fs := flag.NewFlagSet("netwatch setup", flag.ExitOnError)
+		path := fs.String("config", "", "configuration file (defaults to automatic discovery)")
+		fs.Parse(os.Args[2:])
+		if fs.NArg() != 0 {
+			fs.Usage()
+			os.Exit(2)
+		}
+		if _, err := runSetup(*path, true, false, os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "Setup error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	configPath := flag.String("config", "", "configuration file (defaults to automatic discovery)")
+	autoConfig := flag.Bool("auto-config", false, "create configuration from local files and exit")
 	mode := flag.String("mode", "live", "live, replay or interval")
 	logPath := flag.String("log", "", "historical log (defaults to access_log)")
 	last := flag.Duration("last", 15*time.Minute, "replay duration when explicit bounds are absent")
@@ -34,6 +50,19 @@ func main() {
 	if flag.NArg() != 0 {
 		fmt.Fprintf(os.Stderr, "unexpected argument: %q\n", flag.Arg(0))
 		os.Exit(2)
+	}
+	if *autoConfig {
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name != "auto-config" && f.Name != "config" {
+				fmt.Fprintf(os.Stderr, "--auto-config conflicts with --%s\n", f.Name)
+				os.Exit(2)
+			}
+		})
+		if err := runAutoConfig(*configPath, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "Setup error:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	if *interval != "" || *mode == "interval" {
 		if *mode != "live" && *mode != "interval" {
@@ -83,7 +112,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := runSetup(*configPath, false, terminal(os.Stdin) && terminal(os.Stdout), os.Stdin, os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
 		os.Exit(1)
@@ -106,6 +135,9 @@ func main() {
 	}
 
 	if resolver != nil {
+		if cfg.GeoIPSource == "db-ip" {
+			fmt.Fprintln(os.Stderr, geoip.DBIPAttribution)
+		}
 		defer resolver.Close()
 	}
 
