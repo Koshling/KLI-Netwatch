@@ -67,31 +67,8 @@ func runSetup(explicitPath string, setupOnly, interactive bool, in io.Reader, ou
 	}
 
 	fmt.Fprintln(out, "NETWATCH first-run setup")
-	defaultPath := path
-	if explicitPath == "" {
-		var err error
-		path, err = p.ask("Config path (automatic)", path)
-		if err != nil {
-			return config.Config{}, err
-		}
-	}
-	path, err := absolutePath(path)
-	if err != nil {
-		return config.Config{}, err
-	}
-	// A manually entered path may point to an existing configuration.
-	if _, err := os.Lstat(path); err == nil {
-		cfg, err := p.loadExisting(path, setupOnly, interactive)
-		if err == nil {
-			p.rememberConfig(defaultPath, path, explicitPath != "")
-		}
-		return cfg, err
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return config.Config{}, err
-	}
-
 	cfg := config.Default()
-	if err := p.configureLogs(&cfg); err != nil {
+	if err := p.configureAccessLog(&cfg); err != nil {
 		return config.Config{}, err
 	}
 	if err := p.configureGeoIP(path, &cfg); err != nil {
@@ -101,21 +78,7 @@ func runSetup(explicitPath string, setupOnly, interactive bool, in io.Reader, ou
 		return config.Config{}, err
 	}
 	fmt.Fprintln(out, "Saved configuration:", path)
-	p.rememberConfig(defaultPath, path, explicitPath != "")
 	return cfg, nil
-}
-
-func (p setupPrompts) rememberConfig(defaultPath, path string, explicit bool) {
-	if explicit || path == defaultPath {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(defaultPath), 0700); err == nil {
-		if err := os.Symlink(path, defaultPath); err == nil {
-			fmt.Fprintln(p.out, "Saved configuration link:", defaultPath)
-			return
-		}
-	}
-	fmt.Fprintln(p.out, "To use this configuration again, pass -config with the saved path.")
 }
 
 func (p setupPrompts) loadExisting(path string, setupOnly, interactive bool) (config.Config, error) {
@@ -160,17 +123,12 @@ func openRegular(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
-func (p setupPrompts) configureLogs(cfg *config.Config) error {
-	logs := [][2]string{
-		{cfg.AccessLog, cfg.ErrorLog},
-		{"/var/log/httpd/access_log", "/var/log/httpd/error_log"},
-		{"/var/log/apache2/access.log", "/var/log/apache2/error.log"},
-	}
-	for _, pair := range logs {
-		f, err := openRegular(pair[0])
+func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
+	for _, path := range []string{cfg.AccessLog, "/var/log/httpd/access_log", "/var/log/apache2/access.log"} {
+		f, err := openRegular(path)
 		if err == nil {
 			f.Close()
-			cfg.AccessLog, cfg.ErrorLog = pair[0], pair[1]
+			cfg.AccessLog = path
 			break
 		}
 	}
@@ -192,17 +150,8 @@ func (p setupPrompts) configureLogs(cfg *config.Config) error {
 		cfg.AccessLog = path
 		cfg.AccessFormat = detectAccessFormat(f)
 		f.Close()
-		break
+		return nil
 	}
-	if name, ok := map[string]string{"access.log": "error.log", "access_log": "error_log"}[filepath.Base(cfg.AccessLog)]; ok {
-		cfg.ErrorLog = filepath.Join(filepath.Dir(cfg.AccessLog), name)
-	}
-	path, err := p.ask("Error log path (automatic)", cfg.ErrorLog)
-	if err != nil {
-		return err
-	}
-	cfg.ErrorLog, err = absolutePath(path)
-	return err
 }
 
 func detectAccessFormat(r io.Reader) string {

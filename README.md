@@ -17,7 +17,7 @@ go build -o netwatch ./cmd/netwatch
 
 ## First launch
 
-Run `./netwatch` in a Linux terminal. If a configuration is missing, setup suggests paths in brackets. Press Enter to accept a suggestion or type your own path. NETWATCH looks for readable access logs in the usual Nginx and Apache locations and samples the log for a supported format. The default is `combined` when it cannot identify one. The process needs read access to your access log.
+Run `./netwatch` in a Linux terminal. If a configuration is missing, setup asks for your access log and optional GeoIP data. Press Enter to accept a suggested log path or type your own. NETWATCH chooses where to save the config automatically. NETWATCH looks for readable access logs in the usual Nginx and Apache locations and samples the log for a supported format. The default is `combined` when it cannot identify one. The process needs read access to your access log.
 
 The user configuration defaults to `$XDG_CONFIG_HOME/netwatch/netwatch.json` (normally `~/.config/netwatch/netwatch.json`). NETWATCH also checks the legacy `configs/netwatch.json` in the current directory and system configuration directories. To run setup separately or use a particular file:
 

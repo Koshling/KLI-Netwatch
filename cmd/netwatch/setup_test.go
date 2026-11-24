@@ -11,7 +11,7 @@ import (
 	"netwatch/internal/config"
 )
 
-func TestFirstRunRemembersCustomPathAndGeoIPChoice(t *testing.T) {
+func TestFirstRunUsesDefaultConfigPathAndRemembersGeoIPChoice(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
 	t.Setenv("XDG_CONFIG_DIRS", filepath.Join(root, "system"))
@@ -22,22 +22,23 @@ func TestFirstRunRemembersCustomPathAndGeoIPChoice(t *testing.T) {
 	if err := os.WriteFile(access, []byte(common), 0600); err != nil {
 		t.Fatal(err)
 	}
-	custom := filepath.Join(root, "manual", "netwatch.json")
+	path := filepath.Join(root, "config", "netwatch", "netwatch.json")
 	var out bytes.Buffer
-	input := strings.Join([]string{custom, access, "", "", ""}, "\n")
+	input := access + "\n\n"
 	cfg, err := runSetup("", true, false, strings.NewReader(input), &out)
 	if err != nil || cfg.AccessFormat != "common" || !cfg.GeoIPPrompt ||
-		cfg.ErrorLog != filepath.Join(root, "error.log") {
+		cfg.ErrorLog != config.Default().ErrorLog {
 		t.Fatalf("setup failed: %+v, %v\n%s", cfg, err, &out)
 	}
-	if target, err := os.Readlink(filepath.Join(root, "config", "netwatch", "netwatch.json")); err != nil || target != custom {
-		t.Fatalf("custom path was not remembered: %q, %v", target, err)
+	if !strings.Contains(out.String(), "Saved configuration: "+path) ||
+		strings.Contains(out.String(), "Config path") || strings.Contains(out.String(), "Error log path") {
+		t.Fatalf("unexpected setup prompts:\n%s", &out)
 	}
 
 	if _, err := runSetup("", false, true, strings.NewReader("never\n"), io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := config.Load(custom)
+	stored, err := config.Load(path)
 	if err != nil || stored.GeoIPPrompt || stored.AccessLog != access {
 		t.Fatalf("unexpected saved configuration: %+v, %v", stored, err)
 	}
@@ -46,7 +47,7 @@ func TestFirstRunRemembersCustomPathAndGeoIPChoice(t *testing.T) {
 	}
 }
 
-func TestSetupUsesDetectedGeoIP(t *testing.T) {
+func TestSetupUsesExplicitConfigPathAndDetectedGeoIP(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "xdg"))
 	path := filepath.Join(dir, "netwatch.json")
@@ -60,10 +61,13 @@ func TestSetupUsesDetectedGeoIP(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	input := strings.NewReader(access + "\n\n\n")
+	input := strings.NewReader(access + "\n\n")
 	var out bytes.Buffer
 	cfg, err := runSetup(path, true, false, input, &out)
 	if err != nil || cfg.GeoIPIPv4DB != db || cfg.GeoIPPrompt || !strings.Contains(out.String(), "[auto]") {
 		t.Fatalf("database was not selected: %+v, %v\n%s", cfg, err, &out)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatal(err)
 	}
 }
