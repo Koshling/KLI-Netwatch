@@ -32,8 +32,8 @@ func TestIntervalOverview(t *testing.T) {
 				t.Fatal("row width")
 			}
 		}
-		if !strings.Contains(rows[23], themes[index].Name) {
-			t.Fatal("theme missing")
+		if !strings.Contains(rows[23], themes[index].Name) || !strings.Contains(rows[23], "[M] Menu") {
+			t.Fatal("theme or menu key missing")
 		}
 	}
 }

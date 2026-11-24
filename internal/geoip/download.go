@@ -136,7 +136,7 @@ func installDBIP(ctx context.Context, src io.Reader, dataDir, detail, source str
 		if progress != nil {
 			fmt.Fprintf(progress, "Converting IPv%d to NWGEO…\n", family)
 		}
-		if err := convertCSV(ctx, file.Name(), dest, family); err != nil {
+		if err := ConvertCSVContext(ctx, file.Name(), dest, family); err != nil {
 			return "", fmt.Errorf("convert IPv%d: %w", family, err)
 		}
 		if err := os.Remove(file.Name()); err != nil {

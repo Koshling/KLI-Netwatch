@@ -47,10 +47,11 @@ type BinaryResolver struct {
 // It writes into a temporary file and publishes the output only on success.
 // Source and destination must be distinct paths. family must be 4 or 6.
 func ConvertCSV(source, destination string, family int) error {
-	return convertCSV(context.Background(), source, destination, family)
+	return ConvertCSVContext(context.Background(), source, destination, family)
 }
 
-func convertCSV(ctx context.Context, source, destination string, family int) error {
+// ConvertCSVContext runs the same conversion with cancellation.
+func ConvertCSVContext(ctx context.Context, source, destination string, family int) error {
 	if family != 4 && family != 6 {
 		return fmt.Errorf("family must be 4 or 6")
 	}
