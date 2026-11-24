@@ -148,22 +148,50 @@ func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
 			continue
 		}
 		cfg.AccessLog = path
-		cfg.AccessFormat = detectAccessFormat(f)
+		format, detectErr := detectAccessFormat(f)
 		f.Close()
-		return nil
+		if detectErr == nil {
+			cfg.AccessFormat = format
+			return nil
+		}
+
+		fmt.Fprintln(p.out, detectErr)
+		for {
+			answer, err := p.ask("Access log format (combined/common/main/json)", config.Default().AccessFormat)
+			if err != nil {
+				return err
+			}
+			cfg.AccessFormat = strings.ToLower(answer)
+			if err := cfg.Validate(); err != nil {
+				fmt.Fprintln(p.out, err)
+				continue
+			}
+			return nil
+		}
 	}
 }
 
-func detectAccessFormat(r io.Reader) string {
+func detectAccessFormat(r io.Reader) (string, error) {
 	scanner := bufio.NewScanner(io.LimitReader(r, 64*1024))
+	detected := ""
 	for i := 0; i < 12 && scanner.Scan(); i++ {
 		for _, format := range []string{"combined", "common", "json"} {
 			if _, err := event.ParseAccess(scanner.Text(), format); err == nil {
-				return format
+				if detected != "" && detected != format {
+					return "", fmt.Errorf("access log sample matches multiple formats (%s and %s)", detected, format)
+				}
+				detected = format
+				break
 			}
 		}
 	}
-	return "combined"
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("could not sample access log: %w", err)
+	}
+	if detected == "" {
+		return "", errors.New("could not detect the access log format")
+	}
+	return detected, nil
 }
 
 func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) error {
@@ -175,14 +203,13 @@ func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) erro
 		configPath = target
 	}
 	v4, v6 := findGeoIP(filepath.Dir(configPath), dataDir, "data")
-	label := "Download DB-IP Lite? (y/n/never/path; never = do not ask again)"
-	fallback := "N"
+	label := "Download DB-IP Lite? (y/n/never/path)"
+	fallback := "Y"
 	if v4 != "" || v6 != "" {
 		fmt.Fprintf(p.out, "Found GeoIP databases (IPv4: %s, IPv6: %s)\n", v4, v6)
-		label = "GeoIP (auto = use detected files, y = download, n = skip, never = do not ask again, path)"
+		label = "GeoIP (auto = use detected files, y = download, n = skip, never, path)"
 		fallback = "auto"
 	}
-	fmt.Fprintln(p.out, geoip.DBIPAttribution)
 	for {
 		choice, err := p.ask(label, fallback)
 		if err != nil {
@@ -212,7 +239,7 @@ func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) erro
 		case "y", "yes", "download":
 			return p.downloadGeoIP(cfg, dataDir)
 		default:
-			fmt.Fprintln(p.out, "Choose y, n, never (do not ask again), or path.")
+			fmt.Fprintln(p.out, "Choose y, n, never, or path.")
 		}
 	}
 }
@@ -309,6 +336,7 @@ func (p setupPrompts) enterGeoPaths(cfg *config.Config, v4, v6 string) error {
 }
 
 func (p setupPrompts) downloadGeoIP(cfg *config.Config, dataDir string) error {
+	fmt.Fprintln(p.out, geoip.DBIPAttribution)
 	for {
 		fmt.Fprintln(p.out, "1. Countries (small download)\n2. Regions (city download, smaller installed files)\n3. Cities (largest installed files)")
 		answer, err := p.ask("GeoIP detail", "1")

@@ -111,10 +111,6 @@ func main() {
 	)
 	defer stop()
 
-	if cfg.GeoIPSource == "db-ip" {
-		fmt.Fprintln(os.Stderr, geoip.DBIPAttribution)
-	}
-
 	var resolver *geoip.Resolver
 	if cfg.GeoIPIPv4DB != "" || cfg.GeoIPIPv6DB != "" {
 		resolver, err = geoip.Open(cfg.GeoIPIPv4DB, cfg.GeoIPIPv6DB)
@@ -125,6 +121,9 @@ func main() {
 	}
 
 	if resolver != nil {
+		if cfg.GeoIPSource == "db-ip" {
+			fmt.Fprintln(os.Stderr, geoip.DBIPAttribution)
+		}
 		defer resolver.Close()
 	}
 
