@@ -39,6 +39,7 @@ func main() {
 	}
 
 	configPath := flag.String("config", "", "configuration file (defaults to automatic discovery)")
+	autoConfig := flag.Bool("auto-config", false, "create configuration from local files and exit")
 	mode := flag.String("mode", "live", "live, replay or interval")
 	logPath := flag.String("log", "", "historical log (defaults to access_log)")
 	last := flag.Duration("last", 15*time.Minute, "replay duration when explicit bounds are absent")
@@ -49,6 +50,19 @@ func main() {
 	if flag.NArg() != 0 {
 		fmt.Fprintf(os.Stderr, "unexpected argument: %q\n", flag.Arg(0))
 		os.Exit(2)
+	}
+	if *autoConfig {
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name != "auto-config" && f.Name != "config" {
+				fmt.Fprintf(os.Stderr, "--auto-config conflicts with --%s\n", f.Name)
+				os.Exit(2)
+			}
+		})
+		if err := runAutoConfig(*configPath, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "Setup error:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	if *interval != "" || *mode == "interval" {
 		if *mode != "live" && *mode != "interval" {

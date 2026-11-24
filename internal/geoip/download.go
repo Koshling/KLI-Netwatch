@@ -25,16 +25,16 @@ var countryPointsJSON []byte
 
 // DownloadDBIP installs a pair of NWGEO files in a new directory under dataDir.
 // The completed download can be discovered again if config saving fails.
-func DownloadDBIP(ctx context.Context, dataDir, detail string) (dir string, usedSystemDNS bool, err error) {
+func DownloadDBIP(ctx context.Context, dataDir, detail string, progress io.Writer) (dir string, usedSystemDNS bool, err error) {
 	now := time.Now().UTC()
 	var fallbackUsed atomic.Bool
 	transport := dbipTransport(&fallbackUsed)
 	defer transport.CloseIdleConnections()
-	dir, err = downloadDBIP(ctx, dataDir, detail, "https://download.db-ip.com/free", now, transport)
+	dir, err = downloadDBIP(ctx, dataDir, detail, "https://download.db-ip.com/free", now, transport, progress)
 	return dir, fallbackUsed.Load(), err
 }
 
-func downloadDBIP(ctx context.Context, dataDir, detail, baseURL string, now time.Time, transport http.RoundTripper) (string, error) {
+func downloadDBIP(ctx context.Context, dataDir, detail, baseURL string, now time.Time, transport http.RoundTripper, progress io.Writer) (string, error) {
 	var edition string
 	switch detail {
 	case "country":
@@ -62,7 +62,11 @@ func downloadDBIP(ctx context.Context, dataDir, detail, baseURL string, now time
 		switch resp.StatusCode {
 		case http.StatusOK:
 			defer resp.Body.Close()
-			return installDBIP(ctx, resp.Body, dataDir, detail, url)
+			body := &archiveProgress{source: resp.Body, out: progress, total: resp.ContentLength}
+			if progress != nil {
+				body.report()
+			}
+			return installDBIP(ctx, body, dataDir, detail, url, progress)
 		case http.StatusNotFound:
 			resp.Body.Close()
 			month = month.AddDate(0, -1, 0)
@@ -77,7 +81,7 @@ func downloadDBIP(ctx context.Context, dataDir, detail, baseURL string, now time
 	return "", fmt.Errorf("no monthly DB-IP archive available")
 }
 
-func installDBIP(ctx context.Context, src io.Reader, dataDir, detail, source string) (string, error) {
+func installDBIP(ctx context.Context, src io.Reader, dataDir, detail, source string, progress io.Writer) (string, error) {
 	gz, err := gzip.NewReader(src)
 	if err != nil {
 		return "", err
@@ -129,6 +133,9 @@ func installDBIP(ctx context.Context, src io.Reader, dataDir, detail, source str
 			return "", err
 		}
 		dest := filepath.Join(dir, fmt.Sprintf("ipv%d.nwgeo", family))
+		if progress != nil {
+			fmt.Fprintf(progress, "Converting IPv%d to NWGEO…\n", family)
+		}
 		if err := convertCSV(ctx, file.Name(), dest, family); err != nil {
 			return "", fmt.Errorf("convert IPv%d: %w", family, err)
 		}

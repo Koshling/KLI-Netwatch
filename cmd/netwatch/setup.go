@@ -44,18 +44,55 @@ func terminal(file *os.File) bool {
 	return errno == 0
 }
 
-func runSetup(explicitPath string, setupOnly, interactive bool, in io.Reader, out io.Writer) (config.Config, error) {
-	path := explicitPath
-	var exists bool
-	if path == "" {
-		var err error
-		path, exists, err = config.Find()
-		if err != nil {
-			return config.Config{}, err
+func setupConfigPath(explicitPath string) (string, bool, error) {
+	if explicitPath == "" {
+		return config.Find()
+	}
+	_, err := os.Lstat(explicitPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return explicitPath, false, nil
+	}
+	return explicitPath, err == nil, err
+}
+
+func runAutoConfig(explicitPath string, out io.Writer) error {
+	path, exists, err := setupConfigPath(explicitPath)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if _, err := config.Load(path); err != nil {
+			return err
 		}
-	} else if _, err := os.Lstat(path); err == nil {
-		exists = true
-	} else if !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintln(out, "Configuration already exists:", path)
+		return nil
+	}
+
+	cfg := config.Default()
+	cfg.AccessLog = suggestedAccessLog(cfg.AccessLog)
+	log, err := openRegular(cfg.AccessLog)
+	if err != nil {
+		return fmt.Errorf("no readable access log found at the standard paths; run netwatch setup to choose one (%w)", err)
+	}
+	format, detectErr := detectAccessFormat(log)
+	log.Close()
+	if detectErr != nil {
+		fmt.Fprintf(out, "%v; using %s.\n", detectErr, cfg.AccessFormat)
+	} else {
+		cfg.AccessFormat = format
+	}
+	configDir, dataDir := setupGeoPaths(path)
+	cfg.GeoIPIPv4DB, cfg.GeoIPIPv6DB, cfg.GeoIPSource = findGeoIP(configDir, dataDir, "data")
+	if err := config.CreateSetup(path, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "Saved configuration:", path)
+	return nil
+}
+
+func runSetup(explicitPath string, setupOnly, interactive bool, in io.Reader, out io.Writer) (config.Config, error) {
+	path, exists, err := setupConfigPath(explicitPath)
+	if err != nil {
 		return config.Config{}, err
 	}
 	p := setupPrompts{lines: bufio.NewScanner(in), out: out}
@@ -123,15 +160,19 @@ func openRegular(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
-func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
-	for _, path := range []string{cfg.AccessLog, "/var/log/httpd/access_log", "/var/log/apache2/access.log"} {
+func suggestedAccessLog(defaultPath string) string {
+	for _, path := range []string{defaultPath, "/var/log/httpd/access_log", "/var/log/apache2/access.log"} {
 		f, err := openRegular(path)
 		if err == nil {
 			f.Close()
-			cfg.AccessLog = path
-			break
+			return path
 		}
 	}
+	return defaultPath
+}
+
+func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
+	cfg.AccessLog = suggestedAccessLog(cfg.AccessLog)
 	for {
 		path, err := p.ask("Access log path (automatic)", cfg.AccessLog)
 		if err != nil {
@@ -194,7 +235,7 @@ func detectAccessFormat(r io.Reader) (string, error) {
 	return detected, nil
 }
 
-func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) error {
+func setupGeoPaths(configPath string) (configDir, dataDir string) {
 	dataDir, err := config.GeoDataDir()
 	if err != nil {
 		dataDir = filepath.Join(filepath.Dir(configPath), "geoip")
@@ -202,7 +243,12 @@ func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) erro
 	if target, err := filepath.EvalSymlinks(configPath); err == nil {
 		configPath = target
 	}
-	v4, v6, source := findGeoIP(filepath.Dir(configPath), dataDir, "data")
+	return filepath.Dir(configPath), dataDir
+}
+
+func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) error {
+	configDir, dataDir := setupGeoPaths(configPath)
+	v4, v6, source := findGeoIP(configDir, dataDir, "data")
 	label := "Download DB-IP Lite for GeoIP? (y/n/never/path)"
 	fallback := "Y"
 	if v4 != "" || v6 != "" {
@@ -342,9 +388,9 @@ func (p setupPrompts) downloadGeoIP(cfg *config.Config, dataDir string) error {
 			fmt.Fprintln(p.out, "Choose 1, 2 or 3.")
 			continue
 		}
-		fmt.Fprintln(p.out, "Downloading and converting IPv4 and IPv6 databases…")
+		fmt.Fprintln(p.out, "Connecting to DB-IP…")
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		dir, usedSystemDNS, err := geoip.DownloadDBIP(ctx, dataDir, detail)
+		dir, usedSystemDNS, err := geoip.DownloadDBIP(ctx, dataDir, detail, p.out)
 		stop()
 		if usedSystemDNS {
 			fmt.Fprintln(p.out, "GeoIP download used the system DNS fallback.")

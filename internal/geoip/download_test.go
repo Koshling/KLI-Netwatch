@@ -1,6 +1,7 @@
 package geoip
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,9 +40,17 @@ func TestDownloadDBIPInstallsBothFamilies(t *testing.T) {
 
 			// The January archive is absent, so the downloader must cross the year boundary.
 			now := time.Date(2026, time.January, 31, 0, 0, 0, 0, time.UTC)
-			dir, err := downloadDBIP(context.Background(), t.TempDir(), detail, server.URL, now, nil)
+			var progress bytes.Buffer
+			dir, err := downloadDBIP(context.Background(), t.TempDir(), detail, server.URL, now, nil, &progress)
 			if err != nil {
 				t.Fatal(err)
+			}
+			output := progress.String()
+			downloaded := strings.Index(output, "[########] 100%")
+			ipv4 := strings.Index(output, "Converting IPv4 to NWGEO")
+			ipv6 := strings.Index(output, "Converting IPv6 to NWGEO")
+			if downloaded < 0 || ipv4 <= downloaded || ipv6 <= ipv4 {
+				t.Fatalf("unexpected progress: %q", output)
 			}
 			r, err := Open(filepath.Join(dir, "ipv4.nwgeo"), filepath.Join(dir, "ipv6.nwgeo"))
 			if err != nil {
@@ -91,7 +101,7 @@ func TestDownloadDBIPRemovesPartialInstallation(t *testing.T) {
 		gz.Close()
 	}))
 	defer server.Close()
-	if _, err := downloadDBIP(context.Background(), root, "country", server.URL, time.Now(), nil); err == nil {
+	if _, err := downloadDBIP(context.Background(), root, "country", server.URL, time.Now(), nil, nil); err == nil {
 		t.Fatal("expected an incomplete archive to fail")
 	}
 	entries, err := os.ReadDir(root)

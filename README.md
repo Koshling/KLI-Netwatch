@@ -27,6 +27,8 @@ The user configuration defaults to `$XDG_CONFIG_HOME/netwatch/netwatch.json` (no
 ./netwatch -config /path/to/netwatch.json
 ```
 
+Use `./netwatch --auto-config` to create a configuration from a readable standard access log and any detected local GeoIP files, then exit. It leaves existing configurations intact and performs no downloads.
+
 Replay and interval modes:
 
 ```sh
@@ -43,7 +45,7 @@ GeoIP is optional. Setup checks for `ipv4.nwgeo`, `ipv6.nwgeo`, `ipv4.csv` and `
 
 Setup can download DB-IP Lite as a gzip-compressed CSV and convert both address families to NWGEO automatically. It keeps the two NWGEO files and their attribution and removes the conversion CSV files. **Countries** is the smallest download. **Regions** downloads the same archive as **Cities** and combines adjacent ranges with the same region to reduce the installed size. Region points are approximate. When no local database is found, Enter selects download and opens the detail menu. `n` skips the download for now. `never` skips future prompts. To re-enable prompting, set `"geoip_prompt": true` in the config while both database paths are empty.
 
-IP Geolocation by [DB-IP](https://db-ip.com), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Setup saves the source and attribution alongside the converted files. Country map points use public-domain [Natural Earth](https://www.naturalearthdata.com/about/terms-of-use/) labels.
+IP Geolocation by [DB-IP](https://db-ip.com), licensed separately under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). NETWATCH releases contain the program, and setup downloads the data separately. Setup saves the source, license and description of the conversion alongside the converted files. Country map points use public-domain [Natural Earth](https://www.naturalearthdata.com/about/terms-of-use/) labels.
 
 You can also convert supported local CSV data to NWGEO with the same executable:
 
