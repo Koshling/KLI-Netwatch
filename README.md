@@ -15,6 +15,8 @@ go vet ./...
 CGO_ENABLED=0 go build -o netwatch ./cmd/netwatch
 ```
 
+See the [release verification](docs/release-verification.md) for the load scenarios and reproduction commands.
+
 ## First launch
 
 Run `./netwatch` in a Linux terminal. If a configuration is missing, setup asks for your access log and optional GeoIP data. Press Enter to accept a suggested log path or type your own. NETWATCH chooses where to save the config automatically. NETWATCH looks for readable access logs in the usual Nginx, Apache, Caddy, Envoy and Traefik log directories and samples the log for a supported format. If it cannot identify a single format, setup asks you to choose and suggests the usual format for that source. The process needs read access to your access log.
