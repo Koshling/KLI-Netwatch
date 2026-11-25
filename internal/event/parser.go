@@ -1,7 +1,6 @@
 package event
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"regexp"
@@ -12,18 +11,20 @@ import (
 
 var (
 	combinedRE = regexp.MustCompile(
-		`^(\S+) \S+ \S+ \[([^\]]+)\] "([^"]*)" (\d{3}) (\S+) "([^"]*)" "([^"]*)"(?: "([^"]*)")?$`,
+		`^(\S+) \S+ \S+ \[([^\]]+)\] "` + quotedLogField + `" (\d{3}) (\S+) "` + quotedLogField + `" "` + quotedLogField + `"(?: "` + quotedLogField + `")?$`,
 	)
 	commonRE = regexp.MustCompile(
-		`^(\S+) \S+ \S+ \[([^\]]+)\] "([^"]*)" (\d{3}) (\S+)$`,
+		`^(\S+) \S+ \S+ \[([^\]]+)\] "` + quotedLogField + `" (\d{3}) (\S+)$`,
 	)
 	errorRE = regexp.MustCompile(
 		`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] (\d+)#(\d+): (?:\*([0-9]+) )?(.*)$`,
 	)
 )
 
+const commonLogTime = "02/Jan/2006:15:04:05 -0700"
+
 func parseTime(value string) (time.Time, error) {
-	return time.Parse("02/Jan/2006:15:04:05 -0700", value)
+	return time.Parse(commonLogTime, value)
 }
 
 func parseRequest(value string) (string, string, string) {
@@ -50,6 +51,14 @@ func accessStatus(value string) (int, error) {
 	return int(n), nil
 }
 
+// Some proxies record zero when the connection closes before a response.
+func loggedStatus(value string) (int, error) {
+	if value == "0" || value == "000" {
+		return 0, nil
+	}
+	return accessStatus(value)
+}
+
 func parseIP(value string) string {
 	ip := net.ParseIP(value)
 	if ip == nil {
@@ -59,16 +68,11 @@ func parseIP(value string) string {
 }
 
 func ParseAccess(line, format string) (AccessEvent, error) {
-	switch format {
-	case "combined", "main":
-		return parseCombined(line)
-	case "common":
-		return parseCommon(line)
-	case "json":
-		return parseJSON(line)
-	default:
-		return AccessEvent{}, fmt.Errorf("unsupported access format: %s", format)
+	parse, err := NewAccessParser(format, "", "", nil)
+	if err != nil {
+		return AccessEvent{}, err
 	}
+	return parse(line)
 }
 
 func parseCombined(line string) (AccessEvent, error) {
@@ -93,7 +97,7 @@ func parseText(match []string) (AccessEvent, error) {
 	if e.ClientIP == "" {
 		return AccessEvent{}, fmt.Errorf("invalid client IP")
 	}
-	e.Status, err = accessStatus(match[4])
+	e.Status, err = loggedStatus(match[4])
 	if err != nil {
 		return AccessEvent{}, err
 	}
@@ -110,90 +114,12 @@ func parseText(match []string) (AccessEvent, error) {
 		}
 	}
 	if len(match) > 6 {
-		e.Referer, e.UserAgent, e.XForwardedFor = match[6], match[7], match[8]
+		e.Referer, e.UserAgent = match[6], match[7]
+	}
+	if len(match) > 8 {
+		e.XForwardedFor = match[8]
 	}
 	return e, nil
-}
-
-func parseJSON(line string) (AccessEvent, error) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(line), &fields); err != nil {
-		return AccessEvent{}, err
-	}
-
-	var result AccessEvent
-	var fieldErr error
-	read := func(key string, target any) {
-		if value, ok := fields[key]; ok && fieldErr == nil {
-			if string(value) == "null" || json.Unmarshal(value, target) != nil {
-				fieldErr = fmt.Errorf("invalid %s", key)
-			}
-		}
-	}
-
-	var timestamp string
-	read("time", &timestamp)
-	read("time_local", &timestamp)
-	if fieldErr != nil || timestamp == "" {
-		return AccessEvent{}, fmt.Errorf("invalid timestamp")
-	}
-	{
-		parsed, err := time.Parse(time.RFC3339, timestamp)
-		if err != nil {
-			parsed, err = parseTime(timestamp)
-		}
-		if err != nil {
-			return AccessEvent{}, fmt.Errorf("invalid JSON timestamp: %w", err)
-		}
-		if parsed.IsZero() {
-			return AccessEvent{}, fmt.Errorf("invalid timestamp")
-		}
-		result.Time = parsed
-	}
-
-	read("remote_addr", &result.ClientIP)
-	read("client_ip", &result.ClientIP)
-	read("request_method", &result.Method)
-	read("method", &result.Method)
-	read("request_uri", &result.URL)
-	read("url", &result.URL)
-	read("server_protocol", &result.Protocol)
-	numberText := func(key string) string {
-		value := fields[key]
-		if len(value) > 0 && value[0] == '"' {
-			var text string
-			read(key, &text)
-			return text
-		}
-		return string(value)
-	}
-	var err error
-	result.Status, err = accessStatus(numberText("status"))
-	if err != nil {
-		return AccessEvent{}, err
-	}
-	for _, key := range []string{"body_bytes_sent", "bytes_sent"} {
-		if _, ok := fields[key]; ok {
-			result.ResponseSize, err = decimalField(numberText(key), "response size", 63)
-			if err != nil {
-				return AccessEvent{}, err
-			}
-		}
-	}
-	read("http_referer", &result.Referer)
-	read("referer", &result.Referer)
-	read("http_user_agent", &result.UserAgent)
-	read("user_agent", &result.UserAgent)
-	read("http_x_forwarded_for", &result.XForwardedFor)
-
-	if fieldErr != nil {
-		return AccessEvent{}, fieldErr
-	}
-	result.ClientIP = parseIP(result.ClientIP)
-	if result.ClientIP == "" {
-		return AccessEvent{}, fmt.Errorf("invalid client IP")
-	}
-	return result, nil
 }
 
 func ParseError(line string) (ErrorEvent, error) {
@@ -219,4 +145,58 @@ func ParseError(line string) (ErrorEvent, error) {
 		Connection: match[5],
 		Message:    match[6],
 	}, nil
+}
+
+func parseAccessRequest(value string) (method, url, protocol string) {
+	method, rest, ok := strings.Cut(value, " ")
+	if !ok || method == "" || rest == "" {
+		return "", "", ""
+	}
+	if i := strings.LastIndex(rest, " HTTP/"); i >= 0 {
+		return method, rest[:i], rest[i+1:]
+	}
+	return method, rest, ""
+}
+
+func parseAccessTime(value string) (time.Time, error) {
+	for _, layout := range []string{
+		time.RFC3339Nano, commonLogTime,
+		"2006-01-02T15:04:05.999999999Z0700", "2006/01/02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, value); err == nil && !t.IsZero() {
+			return t, nil
+		}
+	}
+	if t, ok := parseEpoch(value); ok {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("invalid timestamp")
+}
+
+func parseEpoch(value string) (time.Time, bool) {
+	integer, fraction, hasFraction := strings.Cut(value, ".")
+	n, err := strconv.ParseInt(integer, 10, 64)
+	if err != nil || n < 0 || (hasFraction && fraction == "") {
+		return time.Time{}, false
+	}
+	unit := int64(1)
+	switch digits := len(strings.TrimLeft(integer, "0")); {
+	case digits > 16:
+		unit = 1_000_000_000
+	case digits > 13:
+		unit = 1_000_000
+	case digits > 10:
+		unit = 1_000
+	}
+	// Preserve nanoseconds without converting a large timestamp to float64.
+	scale := int64(time.Second) / unit
+	nanos := (n % unit) * scale
+	for _, digit := range fraction {
+		if digit < '0' || digit > '9' {
+			return time.Time{}, false
+		}
+		scale /= 10
+		nanos += int64(digit-'0') * scale
+	}
+	return time.Unix(n/unit, nanos).UTC(), true
 }

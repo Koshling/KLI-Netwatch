@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -69,14 +70,25 @@ func runAutoConfig(explicitPath string, out io.Writer) error {
 	}
 
 	cfg := config.Default()
-	cfg.AccessLog = suggestedAccessLog(cfg.AccessLog)
+	candidates := discoverAccessLogs("/var/log")
+	if len(candidates) > 0 {
+		cfg.AccessLog = candidates[0].path
+		cfg.AccessFormat = candidates[0].fallbackFormat()
+	}
 	log, err := openRegular(cfg.AccessLog)
 	if err != nil {
 		return fmt.Errorf("no readable access log found at the standard paths; run netwatch setup to choose one (%w)", err)
 	}
+	info, statErr := log.Stat()
 	format, detectErr := detectAccessFormat(log)
 	log.Close()
+	if statErr != nil {
+		return statErr
+	}
 	if detectErr != nil {
+		if info.Size() > 0 {
+			return fmt.Errorf("%w; run netwatch setup to choose the format", detectErr)
+		}
 		fmt.Fprintf(out, "%v; using %s.\n", detectErr, cfg.AccessFormat)
 	} else {
 		cfg.AccessFormat = format
@@ -131,6 +143,7 @@ func (p setupPrompts) loadExisting(path string, setupOnly, interactive bool) (co
 			if err := config.SaveGeoSetup(path, cfg); err != nil {
 				return config.Config{}, err
 			}
+			return config.Load(path)
 		}
 	} else if setupOnly {
 		fmt.Fprintln(p.out, "Configuration already exists:", path)
@@ -160,21 +173,95 @@ func openRegular(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
-func suggestedAccessLog(defaultPath string) string {
-	for _, path := range []string{defaultPath, "/var/log/httpd/access_log", "/var/log/apache2/access.log"} {
-		f, err := openRegular(path)
-		if err == nil {
-			f.Close()
-			return path
+type accessLogCandidate struct {
+	server string
+	path   string
+}
+
+func (c accessLogCandidate) fallbackFormat() string {
+	switch c.server {
+	case "caddy":
+		return "json"
+	case "envoy", "traefik":
+		return c.server
+	case "apache":
+		if filepath.Base(c.path) == "other_vhosts_access.log" {
+			return "apache-vhost"
 		}
 	}
-	return defaultPath
+	return "combined"
+}
+
+func discoverAccessLogs(root string) []accessLogCandidate {
+	var candidates []accessLogCandidate
+	for _, source := range []struct {
+		name     string
+		patterns []string
+	}{
+		{"nginx", []string{"nginx/access.log", "nginx/access*.log", "nginx/*access*.log"}},
+		{"apache", []string{"httpd/access_log", "apache2/access.log", "httpd/*access*log", "apache2/*access*.log"}},
+		{"caddy", []string{"caddy/access.log", "caddy/*access*.log"}},
+		{"envoy", []string{"envoy/access.log", "envoy/*access*.log"}},
+		{"traefik", []string{"traefik/access.log", "traefik/*access*.log"}},
+	} {
+		var paths []string
+		for _, pattern := range source.patterns {
+			matches, _ := filepath.Glob(filepath.Join(root, pattern))
+			for _, path := range matches {
+				if slices.Contains(paths, path) {
+					continue
+				}
+				if f, err := openRegular(path); err == nil {
+					f.Close()
+					paths = append(paths, path)
+					candidates = append(candidates, accessLogCandidate{source.name, path})
+				}
+			}
+		}
+	}
+	return candidates
+}
+
+func (p setupPrompts) chooseAccessLog(candidates []accessLogCandidate, fallback string) (string, error) {
+	var servers []string
+	for _, c := range candidates {
+		if !slices.Contains(servers, c.server) {
+			servers = append(servers, c.server)
+		}
+	}
+	if len(candidates) == 0 {
+		return p.ask("Access log path (automatic)", fallback)
+	}
+	if len(candidates) == 1 {
+		return p.ask("Access log path (automatic)", candidates[0].path)
+	}
+	answer, err := p.ask("Access log source ("+strings.Join(servers, "/")+"/path)", servers[0])
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(answer, "path") {
+		return p.ask("Access log path", candidates[0].path)
+	}
+	var paths []string
+	for _, c := range candidates {
+		if strings.EqualFold(answer, c.server) {
+			paths = append(paths, c.path)
+		}
+	}
+	if len(paths) == 1 {
+		return paths[0], nil
+	}
+	if len(paths) > 1 {
+		fmt.Fprintln(p.out, strings.Join(paths, "\n"))
+		return p.ask("Access log path", paths[0])
+	}
+	return answer, nil
 }
 
 func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
-	cfg.AccessLog = suggestedAccessLog(cfg.AccessLog)
 	for {
-		path, err := p.ask("Access log path (automatic)", cfg.AccessLog)
+		candidates := discoverAccessLogs("/var/log")
+		path, err := p.chooseAccessLog(candidates, cfg.AccessLog)
 		if err != nil {
 			return err
 		}
@@ -197,12 +284,26 @@ func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
 		}
 
 		fmt.Fprintln(p.out, detectErr)
+		fallback := config.Default().AccessFormat
+		for _, c := range candidates {
+			if c.path == path {
+				fallback = c.fallbackFormat()
+				break
+			}
+		}
 		for {
-			answer, err := p.ask("Access log format (combined/common/main/json)", config.Default().AccessFormat)
+			answer, err := p.ask("Access log format ("+strings.Join(event.SampleFormats(), "/")+"/nginx/main)", fallback)
 			if err != nil {
 				return err
 			}
 			cfg.AccessFormat = strings.ToLower(answer)
+			cfg.NginxLogFormat = ""
+			if cfg.AccessFormat == "nginx" {
+				cfg.NginxLogFormat, err = p.ask("Nginx log_format directive or single-line template", "")
+				if err != nil {
+					return err
+				}
+			}
 			if err := cfg.Validate(); err != nil {
 				fmt.Fprintln(p.out, err)
 				continue
@@ -215,8 +316,9 @@ func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
 func detectAccessFormat(r io.Reader) (string, error) {
 	scanner := bufio.NewScanner(io.LimitReader(r, 64*1024))
 	detected := ""
+	formats := event.SampleFormats()
 	for i := 0; i < 12 && scanner.Scan(); i++ {
-		for _, format := range []string{"combined", "common", "json"} {
+		for _, format := range formats {
 			if _, err := event.ParseAccess(scanner.Text(), format); err == nil {
 				if detected != "" && detected != format {
 					return "", fmt.Errorf("access log sample matches multiple formats (%s and %s)", detected, format)

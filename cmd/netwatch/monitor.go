@@ -16,12 +16,16 @@ import (
 )
 
 func runMonitor(ctx context.Context, cfg config.Config, geo dashboard.GeoOptions, launch dashboard.LaunchOptions) error {
+	parse, err := cfg.AccessParser()
+	if err != nil {
+		return err
+	}
 	session := &dashboard.Session{}
 	defer session.Close()
 
 	// A direct CLI launch reports failures to stderr. Once the user opens the
 	// menu, a failed launch returns there so the settings can be corrected.
-	err := runMode(ctx, session, cfg, geo, launch)
+	err = runMode(ctx, session, cfg, parse, geo, launch)
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -38,19 +42,19 @@ func runMonitor(ctx context.Context, cfg config.Config, geo dashboard.GeoOptions
 		if err != nil || !selected {
 			return err
 		}
-		err = runMode(ctx, session, cfg, geo, launch)
+		err = runMode(ctx, session, cfg, parse, geo, launch)
 	}
 	return nil
 }
 
-func runMode(ctx context.Context, session *dashboard.Session, cfg config.Config, geo dashboard.GeoOptions, launch dashboard.LaunchOptions) error {
+func runMode(ctx context.Context, session *dashboard.Session, cfg config.Config, parse event.AccessParser, geo dashboard.GeoOptions, launch dashboard.LaunchOptions) error {
 	if launch.Mode == dashboard.Live {
 		modeCtx, cancel := context.WithCancel(ctx)
 		events := make(chan event.AccessEvent, 512)
 		readerDone := make(chan error, 1)
 		go func() {
 			defer close(events)
-			readerDone <- followAccess(modeCtx, cfg, events)
+			readerDone <- followAccess(modeCtx, cfg, parse, events)
 		}()
 		err := session.RunLive(modeCtx, events, geo)
 		cancel()
@@ -83,7 +87,7 @@ func runMode(ctx context.Context, session *dashboard.Session, cfg config.Config,
 	}
 	scan := func(ctx context.Context, emit func(event.AccessEvent) error) (int, error) {
 		var previous time.Time
-		return history.ScanSnapshot(ctx, file, info.Size(), cfg.AccessFormat, cfg.MaxLineSize, start, end, func(e event.AccessEvent) error {
+		return history.ScanSnapshot(ctx, file, info.Size(), parse, cfg.MaxLineSize, start, end, func(e event.AccessEvent) error {
 			if e.Time.Before(previous) {
 				return fmt.Errorf("timestamps out of order at %s", e.Time.Format(time.RFC3339Nano))
 			}
@@ -97,10 +101,10 @@ func runMode(ctx context.Context, session *dashboard.Session, cfg config.Config,
 	return session.RunReplay(ctx, scan, geo, start, end)
 }
 
-func followAccess(ctx context.Context, cfg config.Config, events chan<- event.AccessEvent) error {
+func followAccess(ctx context.Context, cfg config.Config, parse event.AccessParser, events chan<- event.AccessEvent) error {
 	r := reader.New(cfg.AccessLog, cfg.MaxLineSize, cfg.PollInterval)
 	return r.Follow(ctx, true, func(line string) error {
-		ev, err := event.ParseAccess(line, cfg.AccessFormat)
+		ev, err := parse(line)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Access parse error: %v\n", err)
 			return nil

@@ -17,7 +17,7 @@ CGO_ENABLED=0 go build -o netwatch ./cmd/netwatch
 
 ## First launch
 
-Run `./netwatch` in a Linux terminal. If a configuration is missing, setup asks for your access log and optional GeoIP data. Press Enter to accept a suggested log path or type your own. NETWATCH chooses where to save the config automatically. NETWATCH looks for readable access logs in the usual Nginx and Apache locations and samples the log for a supported format. If it cannot identify a single format, setup asks you to choose and suggests `combined`. The process needs read access to your access log.
+Run `./netwatch` in a Linux terminal. If a configuration is missing, setup asks for your access log and optional GeoIP data. Press Enter to accept a suggested log path or type your own. NETWATCH chooses where to save the config automatically. NETWATCH looks for readable access logs in the usual Nginx, Apache, Caddy, Envoy and Traefik log directories and samples the log for a supported format. If it cannot identify a single format, setup asks you to choose and suggests the usual format for that source. The process needs read access to your access log.
 
 The user configuration defaults to `$XDG_CONFIG_HOME/netwatch/netwatch.json` (normally `~/.config/netwatch/netwatch.json`). NETWATCH also checks the legacy `configs/netwatch.json` in the current directory and system configuration directories. To run setup separately or use a particular file:
 
@@ -27,7 +27,11 @@ The user configuration defaults to `$XDG_CONFIG_HOME/netwatch/netwatch.json` (no
 ./netwatch -config /path/to/netwatch.json
 ```
 
-Use `./netwatch --auto-config` to create a configuration from a readable standard access log and any detected local GeoIP files, then exit. It leaves existing configurations intact and performs no downloads.
+When several readable logs are found, setup offers the detected servers and a custom path. Nginx is the default when present, followed by the other servers in alphabetical order.
+
+Use `./netwatch --auto-config` to create a configuration from a readable standard access log and any detected local GeoIP files, then exit. It leaves existing configurations intact and performs no downloads. If a non-empty log sample has an unknown format, run interactive setup to supply the format.
+
+See the [access log format reference](docs/access-logs.md) for custom Nginx templates, Caddy, Traefik, Apache, Envoy and JSON field mappings.
 
 ## Modes and controls
 

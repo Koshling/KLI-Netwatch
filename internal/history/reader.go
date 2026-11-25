@@ -29,11 +29,15 @@ func Scan(ctx context.Context, path, format string, limit int, from, until time.
 	if !info.Mode().IsRegular() {
 		return 0, fmt.Errorf("expected regular log file")
 	}
-	return ScanSnapshot(ctx, f, info.Size(), format, limit, from, until, emit)
+	parse, err := event.NewAccessParser(format, "", "", nil)
+	if err != nil {
+		return 0, err
+	}
+	return ScanSnapshot(ctx, f, info.Size(), parse, limit, from, until, emit)
 }
 
 // ScanSnapshot uses a private cursor over the same open file and byte boundary on each pass.
-func ScanSnapshot(ctx context.Context, f *os.File, size int64, format string, limit int, from, until time.Time, emit func(event.AccessEvent) error) (skipped int, err error) {
+func ScanSnapshot(ctx context.Context, f *os.File, size int64, parse event.AccessParser, limit int, from, until time.Time, emit func(event.AccessEvent) error) (skipped int, err error) {
 	if limit < 1 || !from.Before(until) {
 		return 0, fmt.Errorf("invalid line limit or interval")
 	}
@@ -74,7 +78,7 @@ func ScanSnapshot(ctx context.Context, f *os.File, size int64, format string, li
 		if oversized {
 			skipped++
 		} else {
-			e, parseErr := event.ParseAccess(strings.TrimSuffix(string(line), "\r"), format)
+			e, parseErr := parse(strings.TrimSuffix(string(line), "\r"))
 			if parseErr != nil || e.Time.IsZero() {
 				skipped++
 			} else if !e.Time.Before(from) && e.Time.Before(until) {

@@ -6,12 +6,17 @@ import (
 	"math"
 	"os"
 	"time"
+
+	"netwatch/internal/event"
 )
 
 type Config struct {
 	AccessLog            string
 	ErrorLog             string
 	AccessFormat         string
+	NginxLogFormat       string
+	NginxEscape          string
+	AccessFields         map[string]string
 	MaxLineSize          int
 	PollInterval         time.Duration
 	GeoIPIPv4DB          string
@@ -24,17 +29,20 @@ type Config struct {
 }
 
 type configFile struct {
-	AccessLog       string   `json:"access_log"`
-	ErrorLog        string   `json:"error_log"`
-	AccessFormat    string   `json:"access_format"`
-	MaxLineSize     int      `json:"max_line_size"`
-	PollInterval    string   `json:"poll_interval"`
-	GeoIPIPv4DB     string   `json:"geoip_ipv4_db"`
-	GeoIPIPv6DB     string   `json:"geoip_ipv6_db"`
-	GeoIPPrompt     bool     `json:"geoip_prompt,omitempty"`
-	GeoIPSource     string   `json:"geoip_source,omitempty"`
-	ServerLatitude  *float64 `json:"server_latitude"`
-	ServerLongitude *float64 `json:"server_longitude"`
+	AccessLog       string            `json:"access_log"`
+	ErrorLog        string            `json:"error_log"`
+	AccessFormat    string            `json:"access_format"`
+	NginxLogFormat  string            `json:"nginx_log_format,omitempty"`
+	NginxEscape     string            `json:"nginx_escape,omitempty"`
+	AccessFields    map[string]string `json:"access_fields,omitempty"`
+	MaxLineSize     int               `json:"max_line_size"`
+	PollInterval    string            `json:"poll_interval"`
+	GeoIPIPv4DB     string            `json:"geoip_ipv4_db"`
+	GeoIPIPv6DB     string            `json:"geoip_ipv6_db"`
+	GeoIPPrompt     bool              `json:"geoip_prompt,omitempty"`
+	GeoIPSource     string            `json:"geoip_source,omitempty"`
+	ServerLatitude  *float64          `json:"server_latitude"`
+	ServerLongitude *float64          `json:"server_longitude"`
 }
 
 func Default() Config {
@@ -69,6 +77,9 @@ func Load(path string) (Config, error) {
 	if file.AccessFormat != "" {
 		cfg.AccessFormat = file.AccessFormat
 	}
+	cfg.NginxLogFormat = file.NginxLogFormat
+	cfg.NginxEscape = file.NginxEscape
+	cfg.AccessFields = file.AccessFields
 	if file.MaxLineSize != 0 {
 		cfg.MaxLineSize = file.MaxLineSize
 	}
@@ -103,15 +114,17 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+func (c Config) AccessParser() (event.AccessParser, error) {
+	return event.NewAccessParser(c.AccessFormat, c.NginxLogFormat, c.NginxEscape, c.AccessFields)
+}
+
 func (c Config) Validate() error {
 	if c.AccessLog == "" || c.ErrorLog == "" {
 		return fmt.Errorf("log paths cannot be empty")
 	}
 
-	switch c.AccessFormat {
-	case "combined", "common", "main", "json":
-	default:
-		return fmt.Errorf("unsupported access_format: %q", c.AccessFormat)
+	if _, err := c.AccessParser(); err != nil {
+		return err
 	}
 
 	if c.MaxLineSize < 1024 || c.MaxLineSize > 1048576 {

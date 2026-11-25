@@ -66,8 +66,13 @@ func CreateSetup(path string, cfg Config) error {
 	}
 	file := configFile{
 		AccessLog: cfg.AccessLog, ErrorLog: cfg.ErrorLog, AccessFormat: cfg.AccessFormat,
+		NginxLogFormat: cfg.NginxLogFormat, NginxEscape: cfg.NginxEscape, AccessFields: cfg.AccessFields,
 		GeoIPIPv4DB: cfg.GeoIPIPv4DB, GeoIPIPv6DB: cfg.GeoIPIPv6DB,
 		GeoIPPrompt: cfg.GeoIPPrompt, GeoIPSource: cfg.GeoIPSource,
+		MaxLineSize: cfg.MaxLineSize, PollInterval: cfg.PollInterval.String(),
+	}
+	if cfg.ServerCoordinatesSet {
+		file.ServerLatitude, file.ServerLongitude = &cfg.ServerLatitude, &cfg.ServerLongitude
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
