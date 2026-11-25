@@ -135,3 +135,28 @@ func TestInvalidNginxLogFormats(t *testing.T) {
 		}
 	}
 }
+
+func TestNginxIngressTemplate(t *testing.T) {
+	const template = `log_format upstreaminfo '$remote_addr - $remote_user [$time_local] "$request" '
+		'$status $body_bytes_sent "$http_referer" "$http_user_agent" $request_length $request_time '
+		'[$proxy_upstream_name] [$proxy_alternative_upstream_name] $upstream_addr $upstream_response_length '
+		'$upstream_response_time $upstream_status $req_id';`
+	const line = `2001:db8::1 - - [25/Nov/2026:12:00:00 +0300] "GET /app?x=1 HTTP/2.0" 200 15 "-" "Test agent" 120 0.029 [default-app-80] [] 10.0.0.1:80, 10.0.0.2:80 0, 15 0.001, 0.028 502, 200 id`
+	parse, err := NewAccessParser("nginx", template, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := parse(line)
+	if err != nil || e.URL != "/app?x=1" || e.Status != 200 || e.ResponseSize != 15 || e.ClientIP != "2001:db8::1" ||
+		e.Time.Format("-0700") != "+0300" {
+		t.Fatalf("%+v, %v", e, err)
+	}
+	parse, err = NewAccessParser("nginx", `$time_local $remote_addr $status "$uri?$args"`, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err = parse(`25/Nov/2026:12:00:00 +0300 192.0.2.1 201 "/app?a=2"`)
+	if err != nil || e.URL != "/app?a=2" || e.Status != 201 || e.ClientIP != "192.0.2.1" {
+		t.Fatalf("%+v, %v", e, err)
+	}
+}

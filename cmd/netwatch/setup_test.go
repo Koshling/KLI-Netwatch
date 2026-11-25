@@ -126,3 +126,37 @@ func TestSetupPersistsNginxTemplate(t *testing.T) {
 		t.Fatalf("unexpected access event: %+v, %v", e, err)
 	}
 }
+
+func TestChooseDiscoveredAccessLog(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"apache2/access.log", "caddy/access.log", "nginx/access.log", "nginx/shop-access.log"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidates := discoverAccessLogs(root)
+	if len(candidates) != 4 {
+		t.Fatal(candidates)
+	}
+	for _, tc := range []struct {
+		candidates          []accessLogCandidate
+		input, want, prompt string
+	}{
+		{candidates, "\n\n", "nginx/access.log", "(nginx/apache/caddy/path) [nginx]"},
+		{candidates, "caddy\n", "caddy/access.log", "(nginx/apache/caddy/path) [nginx]"},
+		{candidates, "nginx\n" + filepath.Join(root, "nginx/shop-access.log") + "\n", "nginx/shop-access.log", "shop-access.log"},
+		{candidates, "path\n" + filepath.Join(root, "other.log") + "\n", "other.log", "Access log path ["},
+		{candidates[2:], "\n", "apache2/access.log", "(apache/caddy/path) [apache]"},
+	} {
+		var out bytes.Buffer
+		p := setupPrompts{bufio.NewScanner(strings.NewReader(tc.input)), &out}
+		got, err := p.chooseAccessLog(tc.candidates, "")
+		if err != nil || got != filepath.Join(root, tc.want) || !strings.Contains(out.String(), tc.prompt) {
+			t.Errorf("got %q, %v; prompts %q", got, err, out.String())
+		}
+	}
+}

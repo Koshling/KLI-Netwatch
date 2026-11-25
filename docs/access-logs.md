@@ -27,7 +27,7 @@ Paste a complete `log_format` directive or its concatenated template into `nginx
 
 The parser uses `$time_iso8601`, `$msec` or `$time_local` for time, and `$remote_addr`, `$realip_remote_addr` or `$proxy_protocol_addr` for the client address. It also reads `$request` or individual request variables, response status and size, referer, agent and forwarded-for. Other variables can appear anywhere in the template. To use a variable defined in a `map`, set the corresponding field to its variable name, for example `"access_fields": {"client_ip": "logged_client"}`.
 
-Time and IP must be present. Use distinct separators or quotes when values can contain spaces or punctuation. The parser recognizes `$uri$is_args$args` as one URL. Other adjacent variables need a separator. Embedded newlines and templates that emit indistinguishable records cannot be decoded reliably. NETWATCH does not inspect Nginx configuration files.
+Time and IP must be present. Use distinct separators or quotes when values can contain spaces or punctuation. The parser recognizes `$uri$is_args$args` and `$uri?$args` as one URL. Other adjacent variables need a separator. Embedded newlines and templates that emit indistinguishable records cannot be decoded reliably. NETWATCH does not inspect Nginx configuration files.
 
 ## JSON from other programs
 

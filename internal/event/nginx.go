@@ -20,7 +20,7 @@ var nginxFields = map[string][]string{
 	"client_ip":       {"remote_addr", "realip_remote_addr", "proxy_protocol_addr"},
 	"request":         {"request"},
 	"method":          {"request_method"},
-	"url":             {"request_uri", "uri$is_args$args", "uri", "document_uri"},
+	"url":             {"request_uri", "uri$is_args$args", "uri?$args", "uri", "document_uri"},
 	"protocol":        {"server_protocol", "protocol"},
 	"status":          {"status"},
 	"response_size":   {"body_bytes_sent", "bytes_sent"},
@@ -182,9 +182,15 @@ func tokenizeNginx(template string) ([]nginxToken, error) {
 	result := tokens[:0]
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
-		if token.variable == "uri" && i+2 < len(tokens) && tokens[i+1].variable == "is_args" && tokens[i+2].variable == "args" {
-			token.variable = "uri$is_args$args"
-			i += 2
+		if token.variable == "uri" && i+2 < len(tokens) && tokens[i+2].variable == "args" {
+			switch {
+			case tokens[i+1].variable == "is_args":
+				token.variable = "uri$is_args$args"
+				i += 2
+			case tokens[i+1].literal == "?":
+				token.variable = "uri?$args"
+				i += 2
+			}
 		}
 		if token.variable != "" && len(result) > 0 && result[len(result)-1].variable != "" {
 			return nil, fmt.Errorf("adjacent nginx variables require a literal separator")
