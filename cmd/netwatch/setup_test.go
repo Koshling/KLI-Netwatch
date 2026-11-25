@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"netwatch/internal/config"
 )
@@ -158,5 +159,60 @@ func TestChooseDiscoveredAccessLog(t *testing.T) {
 		if err != nil || got != filepath.Join(root, tc.want) || !strings.Contains(out.String(), tc.prompt) {
 			t.Errorf("got %q, %v; prompts %q", got, err, out.String())
 		}
+	}
+}
+
+func TestFindGeoIPPrefersNewestCompleteInstallation(t *testing.T) {
+	root := t.TempDir()
+	base := time.Unix(100, 0)
+	addInstall := func(parent, name string, age time.Duration, complete bool) string {
+		t.Helper()
+		dir := filepath.Join(parent, name)
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(dir, "ATTRIBUTION.txt")
+		if err := os.WriteFile(marker, []byte("DB-IP fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		stamp := base.Add(age)
+		if err := os.Chtimes(marker, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+		const row = "1,2,US,X,Y,Z,1,2\n"
+		if err := os.WriteFile(filepath.Join(dir, "ipv4.csv"), []byte(row), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if complete {
+			if err := os.WriteFile(filepath.Join(dir, "ipv6.csv"), []byte(row), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	addInstall(root, "dbip-a-old", 0, true)
+	want := addInstall(root, "dbip-b-new", time.Minute, true)
+	addInstall(root, "dbip-c-tie", time.Minute, true)
+	addInstall(root, "dbip-z-incomplete", 2*time.Minute, false)
+	bogus := addInstall(root, "dbip-z-bogus-marker", 3*time.Minute, true)
+	marker := filepath.Join(bogus, "ATTRIBUTION.txt")
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(marker, 0700); err != nil {
+		t.Fatal(err)
+	}
+	laterRoot := t.TempDir()
+	addInstall(laterRoot, "dbip-newest-in-later-root", time.Hour, true)
+	v4, v6, source := findGeoIP(root, laterRoot)
+	if filepath.Dir(v4) != want || filepath.Dir(v6) != want || source != "db-ip" {
+		t.Fatalf("got %q, %q, %q; want pair from %q", v4, v6, source, want)
+	}
+	manual := filepath.Join(root, "ipv4.csv")
+	if err := os.WriteFile(manual, []byte("1,2,US,X,Y,Z,1,2\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if v4, v6, source := findGeoIP(root, laterRoot); v4 != manual || v6 != "" || source != "" {
+		t.Fatalf("standalone database lost priority: %q, %q, %q", v4, v6, source)
 	}
 }

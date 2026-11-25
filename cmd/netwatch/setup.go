@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"netwatch/internal/config"
@@ -390,16 +391,28 @@ func findGeoIP(dirs ...string) (v4, v6, source string) {
 		if a, b := findGeoIPPair(dir); a != "" || b != "" {
 			return a, b, ""
 		}
+		type installation struct {
+			path      string
+			installed time.Time
+		}
+		var installs []installation
 		entries, _ := os.ReadDir(dir)
 		for _, entry := range entries {
 			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "dbip-") {
 				continue
 			}
 			subdir := filepath.Join(dir, entry.Name())
-			if _, err := os.Stat(filepath.Join(subdir, "ATTRIBUTION.txt")); err != nil {
-				continue
+			marker, err := os.Stat(filepath.Join(subdir, "ATTRIBUTION.txt"))
+			if err == nil && marker.Mode().IsRegular() {
+				installs = append(installs, installation{subdir, marker.ModTime()})
 			}
-			if a, b := findGeoIPPair(subdir); a != "" && b != "" {
+		}
+		// ReadDir provides name order, which breaks ties between marker times.
+		slices.SortStableFunc(installs, func(a, b installation) int {
+			return b.installed.Compare(a.installed)
+		})
+		for _, install := range installs {
+			if a, b := findGeoIPPair(install.path); a != "" && b != "" {
 				return a, b, "db-ip"
 			}
 		}
