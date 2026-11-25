@@ -305,10 +305,14 @@ func (r *BinaryResolver) Lookup(rawIP string) Location {
 		return Location{}
 	}
 	addr = addr.Unmap()
-	if !isPublicCandidate(addr) {
+	if addr.Zone() != "" || !isPublicCandidate(addr) {
 		return Location{}
 	}
 	key, v6 := addressKey(addr)
+	return r.lookupAddress(key, v6)
+}
+
+func (r *BinaryResolver) lookupAddress(key [16]byte, v6 bool) Location {
 	if v6 != (r.family == 6) {
 		return Location{}
 	}
@@ -359,13 +363,18 @@ func (r *BinaryResolver) Lookup(rawIP string) Location {
 	if !ok {
 		return Location{}
 	}
-	payload := make([]byte, length)
+	var small [256]byte
+	payload := small[:]
+	if int(length) > len(small) {
+		payload = make([]byte, length)
+	}
+	payload = payload[:length]
 	if _, err := r.file.ReadAt(payload, int64(r.metadataStart+offset)); err != nil {
 		return Location{}
 	}
-	fields := [4]string{}
-	pos := 0
-	for i := range fields {
+	var spans [4][2]int
+	pos, textBytes := 0, 0
+	for i := range spans {
 		if pos+2 > len(payload) {
 			return Location{}
 		}
@@ -374,11 +383,16 @@ func (r *BinaryResolver) Lookup(rawIP string) Location {
 		if n > len(payload)-pos {
 			return Location{}
 		}
-		fields[i] = string(payload[pos : pos+n])
+		// Move the validated text over the already consumed length prefixes.
+		copy(payload[textBytes:], payload[pos:pos+n])
+		spans[i] = [2]int{textBytes, textBytes + n}
+		textBytes += n
 		pos += n
 	}
 	if pos != len(payload) {
 		return Location{}
 	}
-	return Location{CountryCode: fields[0], Country: fields[1], Region: fields[2], City: fields[3], Latitude: lat, Longitude: lon, Found: true}
+	text := string(payload[:textBytes])
+	field := func(i int) string { return text[spans[i][0]:spans[i][1]] }
+	return Location{CountryCode: field(0), Country: field(1), Region: field(2), City: field(3), Latitude: lat, Longitude: lon, Found: true}
 }

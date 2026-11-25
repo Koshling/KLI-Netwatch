@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/netip"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -31,6 +32,16 @@ type geoKey struct {
 	longitude int
 }
 
+type clientLocation struct {
+	latitude, longitude float64
+	found               bool
+}
+
+type clientState struct {
+	classifier.Client
+	location clientLocation
+}
+
 type Dashboard struct {
 	screen
 	overview         *overview
@@ -40,10 +51,9 @@ type Dashboard struct {
 	total            int
 	success          int
 	errors           int
-	clients          map[string]classifier.Category
+	clients          map[netip.Addr]*clientState
 	clientsLimited   bool
 	skippedLive      *atomic.Uint64
-	classifier       *classifier.Classifier
 	feed             []feedEvent
 	feedStart        int
 	angle            float64
@@ -58,8 +68,7 @@ type Dashboard struct {
 	intervalOnly   bool
 
 	geoOptions GeoOptions
-	geoSeen    map[string]*geoKey
-	geoMarkers map[geoKey]int
+	geoMarkers map[geoKey]struct{}
 	signals    []geoMarker
 	signalCap  int
 	pending    []geoMarker
@@ -72,12 +81,10 @@ func (s *Session) RunLive(ctx context.Context, events <-chan event.AccessEvent, 
 
 func newDashboard(options GeoOptions) *Dashboard {
 	return &Dashboard{
-		clients:    make(map[string]classifier.Category),
-		classifier: classifier.New(),
+		clients:    make(map[netip.Addr]*clientState),
 		rates:      make([]int, 120),
 		geoOptions: options,
-		geoSeen:    make(map[string]*geoKey),
-		geoMarkers: make(map[geoKey]int),
+		geoMarkers: make(map[geoKey]struct{}),
 	}
 }
 
@@ -148,11 +155,7 @@ func (s *Session) run(ctx context.Context, events <-chan event.AccessEvent, opti
 		case <-ready:
 			d.updateRate(pending.Time)
 			d.add(*pending)
-			// Logs can interleave writes. Keep the playback cursor monotonic
-			// while preserving the recorded time in the feed and overview.
-			if pending.Time.After(shown) {
-				shown = pending.Time
-			}
+			shown = pending.Time
 			pending = nil
 			ready = nil
 			input = events
@@ -297,54 +300,18 @@ func (s *Session) run(ctx context.Context, events <-chan event.AccessEvent, opti
 }
 
 func (d *Dashboard) add(e event.AccessEvent) {
-	category := d.classifier.Classify(e)
+	category := classifier.User
+	var location clientLocation
+	if e.ClientIP != "" {
+		if addr, err := netip.ParseAddr(e.ClientIP); err == nil && addr.Zone() == "" {
+			category, location = d.observeClient(addr.Unmap(), e)
+		}
+	}
 	if d.overview != nil {
-		d.overview.record(e, d.geoOptions, category)
+		d.overview.record(e.Time, location, category)
 	}
 	d.total++
 	d.currentCount++
-
-	if e.ClientIP != "" {
-		previous, tracked := d.clients[e.ClientIP]
-		if !tracked {
-			tracked = len(d.clients) < classifier.MaxClients
-			d.clientsLimited = d.clientsLimited || !tracked
-		}
-		if tracked && category != previous {
-			switch previous {
-			case classifier.Bot:
-				d.bots--
-			case classifier.Threat:
-				d.threats--
-			}
-			switch category {
-			case classifier.Bot:
-				d.bots++
-			case classifier.Threat:
-				d.threats++
-			}
-			d.clients[e.ClientIP] = category
-		}
-
-		if !d.intervalOnly && d.geoOptions.Resolver != nil {
-			key, seen := d.geoSeen[e.ClientIP]
-			if !seen {
-				loc := d.geoOptions.Resolver.Lookup(e.ClientIP)
-				if loc.Found {
-					key = &geoKey{latitude: int(loc.Latitude * 100), longitude: int(loc.Longitude * 100)}
-					if tracked {
-						d.geoMarkers[*key]++
-					}
-				}
-				if tracked {
-					d.geoSeen[e.ClientIP] = key
-				}
-			}
-			if key != nil {
-				d.startSignal(*key, e.ClientIP, category, e.Time)
-			}
-		}
-	}
 
 	switch {
 	case e.Status >= 200 && e.Status < 300:
@@ -366,8 +333,15 @@ func (d *Dashboard) add(e event.AccessEvent) {
 		when: e.Time, clientIP: e.ClientIP, status: e.Status, category: category,
 	}
 	if !d.intervalOnly {
-		item.method = retainFeedText(e.Method)
-		item.url = retainFeedText(e.URL)
+		method, methodTail := feedField(e.Method)
+		path, pathTail := feedField(e.URL)
+		text := method + methodTail + path + pathTail
+		// When only one field is present, concatenation may alias the input.
+		if method == "" || path == "" {
+			text = strings.Clone(text)
+		}
+		methodEnd := len(method) + len(methodTail)
+		item.method, item.url = text[:methodEnd], text[methodEnd:]
 	}
 	if len(d.feed) < feedLimit {
 		d.feed = append(d.feed, item)
@@ -377,17 +351,82 @@ func (d *Dashboard) add(e event.AccessEvent) {
 	}
 }
 
-// Keep a bounded copy so a short field cannot retain an entire log line.
-func retainFeedText(text string) string {
-	const maxFeedFieldBytes = 2048
-	if len(text) > maxFeedFieldBytes {
-		end := maxFeedFieldBytes - len("…")
-		for end > 0 && !utf8.RuneStart(text[end]) {
-			end--
-		}
-		return text[:end] + "…"
+// Store classification and the result of the first GeoIP lookup under one key.
+func (d *Dashboard) observeClient(addr netip.Addr, e event.AccessEvent) (classifier.Category, clientLocation) {
+	state := d.clients[addr]
+	first := state == nil
+	if first && len(d.clients) < classifier.MaxClients {
+		state = &clientState{}
+		d.clients[addr] = state
 	}
-	return strings.Clone(text)
+
+	var location clientLocation
+	if first && d.geoOptions.Resolver != nil {
+		loc := d.geoOptions.Resolver.LookupAddr(addr)
+		location = clientLocation{loc.Latitude, loc.Longitude, loc.Found}
+	}
+	var category classifier.Category
+	if state == nil {
+		d.clientsLimited = true
+		var untracked *classifier.Client
+		category = untracked.Classify(e)
+	} else {
+		if first {
+			state.location = location
+		}
+		location = state.location
+		previous := state.Category()
+		category = state.Classify(e)
+		if category != previous {
+			if previous == classifier.Bot {
+				d.bots--
+			}
+			switch category {
+			case classifier.Bot:
+				d.bots++
+			case classifier.Threat:
+				d.threats++
+			}
+		}
+	}
+	if location.found && !d.intervalOnly {
+		key := geoKey{latitude: int(location.latitude * 100), longitude: int(location.longitude * 100)}
+		if first && state != nil {
+			d.geoMarkers[key] = struct{}{}
+		}
+		d.startSignal(key, e.ClientIP, category, e.Time)
+	}
+	return category, location
+}
+
+// Bound the retained field without allocating an intermediate string.
+func feedField(text string) (prefix, tail string) {
+	const maxBytes = 2048
+	if len(text) <= maxBytes {
+		return text, ""
+	}
+	end := maxBytes - len("…")
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end], "…"
+}
+
+func fitFeedPath(text string, width int) string {
+	dotStart, runes := 0, 0
+	for i := range text {
+		if runes == width-3 {
+			dotStart = i
+		}
+		if runes == width {
+			if width > 3 {
+				return text[:dotStart] + "..."
+			}
+			return text[:i]
+		}
+		runes++
+	}
+	return text
 }
 
 func (d *Dashboard) clientsLabel() string {
@@ -413,14 +452,14 @@ func printableField(s string) string {
 }
 
 func fitANSI(s string, width int) string {
-	var b strings.Builder
-	visible := 0
+	width = max(0, width)
+	var suffix strings.Builder
+	cut, visible := len(s), 0
 
 	for i := 0; i < len(s); {
 		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
 			start := i
 			i += 2
-
 			for i < len(s) {
 				c := s[i]
 				i++
@@ -428,28 +467,34 @@ func fitANSI(s string, width int) string {
 					break
 				}
 			}
-
-			b.WriteString(s[start:i])
+			if cut < len(s) {
+				if suffix.Len() == 0 {
+					suffix.Grow(cut + i - start)
+					suffix.WriteString(s[:cut])
+				}
+				suffix.WriteString(s[start:i])
+			}
 			continue
 		}
-
+		if visible == width && cut == len(s) {
+			cut = i
+		}
 		_, size := utf8.DecodeRuneInString(s[i:])
-		if size == 0 {
-			break
-		}
-
-		if visible < width {
-			b.WriteString(s[i : i+size])
-		}
-		visible++
 		i += size
+		visible++
 	}
-
+	if suffix.Len() != 0 {
+		return suffix.String()
+	}
 	if visible < width {
-		b.WriteString(strings.Repeat(" ", width-visible))
+		suffix.Grow(len(s) + width - visible)
+		suffix.WriteString(s)
+		for ; visible < width; visible++ {
+			suffix.WriteByte(' ')
+		}
+		return suffix.String()
 	}
-
-	return b.String()
+	return s[:cut]
 }
 
 func (d *Dashboard) render() error {
@@ -541,15 +586,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		}
 
 		item := d.feedAt(index)
-		path := []rune(printableField(item.url))
-
-		if len(path) > pathWidth {
-			if pathWidth > 3 {
-				path = append(path[:pathWidth-3], '.', '.', '.')
-			} else {
-				path = path[:pathWidth]
-			}
-		}
+		path := printableField(fitFeedPath(item.url, pathWidth))
 
 		color := t.Data
 		switch item.category {
@@ -566,7 +603,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 			item.category,
 			printableField(item.method),
 			item.status,
-			string(path),
+			path,
 		))
 	}
 	put(t.Muted + strings.Repeat("─", l.RightWidth-2) + "\033[0m")

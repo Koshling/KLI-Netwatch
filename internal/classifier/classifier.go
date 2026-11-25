@@ -1,7 +1,6 @@
 package classifier
 
 import (
-	"net"
 	"strings"
 	"time"
 
@@ -19,18 +18,27 @@ const (
 	Threat Category = "THREAT"
 )
 
-type clientState struct {
-	category Category
-	next     int
+const (
+	botClient    uint8 = 1
+	threatClient uint8 = 2
+)
+
+// Client holds the bounded classification history of one client.
+type Client struct {
 	requests []int64
+	category uint8
+	next     uint8
 }
 
-type Classifier struct {
-	clients map[string]*clientState
-}
-
-func New() *Classifier {
-	return &Classifier{clients: make(map[string]*clientState)}
+func (c *Client) Category() Category {
+	switch c.category {
+	case botClient:
+		return Bot
+	case threatClient:
+		return Threat
+	default:
+		return User
+	}
 }
 
 var botAgents = []string{
@@ -46,7 +54,7 @@ var suspiciousPaths = []string{
 	"/cgi-bin/", "/.htaccess", "/.htpasswd",
 }
 
-func classifyEvent(e event.AccessEvent, state *clientState, now time.Time) Category {
+func classifyEvent(e event.AccessEvent, state *Client, now time.Time) Category {
 	path, _, _ := strings.Cut(e.URL, "?")
 
 	path = strings.ToLower(path)
@@ -68,13 +76,13 @@ func classifyEvent(e event.AccessEvent, state *clientState, now time.Time) Categ
 	return User
 }
 
-func errorBurst(e event.AccessEvent, state *clientState, now time.Time) bool {
+func errorBurst(e event.AccessEvent, state *Client, now time.Time) bool {
 	// Высокая частота сама по себе не делает клиента угрозой.
 	// Учитываем её только вместе с серией ответов 403/404.
 	// Only the most recent 40 timestamps can establish the threshold.
 	stamp := now.UnixNano()
 	if n := len(state.requests); n > 0 {
-		last := (state.next + n - 1) % n
+		last := (int(state.next) + n - 1) % n
 		if expired(stamp, state.requests[last]) {
 			allExpired := true
 			for _, previous := range state.requests {
@@ -121,48 +129,25 @@ func expired(now, previous int64) bool {
 	return previous <= now && uint64(now)-uint64(previous) > uint64(10*time.Second)
 }
 
-func priority(c Category) int {
-	switch c {
-	case Threat:
-		return 3
-	case Bot:
-		return 2
-	default:
-		return 1
+// Classify retains the highest category seen for a tracked client.
+func (c *Client) Classify(e event.AccessEvent) Category {
+	if c != nil && c.Category() == Threat {
+		return Threat
 	}
-}
-
-// Classify сохраняет наиболее подозрительную категорию клиента
-// в течение текущего запуска NETWATCH.
-func (c *Classifier) Classify(e event.AccessEvent) Category {
-	if e.ClientIP == "" || net.ParseIP(e.ClientIP) == nil {
-		return User
-	}
-
 	now := e.Time
 	if now.IsZero() {
 		now = time.Now()
 	}
-
-	state := c.clients[e.ClientIP]
-	if state == nil {
-		if len(c.clients) >= MaxClients {
-			return classifyEvent(e, nil, now)
-		}
-		state = &clientState{category: User}
-		c.clients[e.ClientIP] = state
+	detected := classifyEvent(e, c, now)
+	if c == nil {
+		return detected
 	}
-
-	if state.category == Threat {
-		return Threat
+	switch detected {
+	case Threat:
+		c.category = threatClient
+		c.requests = nil
+	case Bot:
+		c.category = botClient
 	}
-	detected := classifyEvent(e, state, now)
-	if priority(detected) > priority(state.category) {
-		state.category = detected
-		if detected == Threat {
-			state.requests = nil
-		}
-	}
-
-	return state.category
+	return c.Category()
 }

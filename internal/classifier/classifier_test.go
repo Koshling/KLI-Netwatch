@@ -8,7 +8,6 @@ import (
 )
 
 func TestClassification(t *testing.T) {
-	c := New()
 	now := time.Now()
 
 	tests := []struct {
@@ -53,6 +52,7 @@ func TestClassification(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var c Client
 			if got := c.Classify(tt.event); got != tt.want {
 				t.Fatalf("Classify() = %s, want %s", got, tt.want)
 			}
@@ -61,7 +61,7 @@ func TestClassification(t *testing.T) {
 }
 
 func TestClientCategoryEscalates(t *testing.T) {
-	c := New()
+	var c Client
 	now := time.Now()
 
 	e := event.AccessEvent{

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	maxCacheEntries   = 65536
+	maxCacheEntries   = 16384
 	maxCacheTextBytes = 4 << 20
 	maxLegacyCSVBytes = 16 << 20
 	maxLegacyCSVRows  = 200000
@@ -49,6 +49,8 @@ type Resolver struct {
 	cacheMu          sync.RWMutex
 	cache            map[netip.Addr]Location
 	cacheTextBytes   int
+	cacheOrder       []netip.Addr
+	cacheHead        int
 	legacyInputBytes int64
 }
 
@@ -285,9 +287,13 @@ func (r *Resolver) Lookup(rawIP string) Location {
 	if err != nil {
 		return Location{}
 	}
-	addr = addr.Unmap()
+	return r.LookupAddr(addr)
+}
 
-	if !isPublicCandidate(addr) {
+// LookupAddr uses an already parsed address from the monitor.
+func (r *Resolver) LookupAddr(addr netip.Addr) Location {
+	addr = addr.Unmap()
+	if addr.Zone() != "" || !isPublicCandidate(addr) {
 		return Location{}
 	}
 
@@ -307,7 +313,7 @@ func (r *Resolver) Lookup(rawIP string) Location {
 		disk = r.binaryV4
 	}
 	if disk != nil {
-		loc = disk.Lookup(addr.String())
+		loc = disk.lookupAddress(key, isV6)
 		r.cacheLocation(addr, loc)
 		return loc
 	}
@@ -329,17 +335,36 @@ func (r *Resolver) Lookup(rawIP string) Location {
 	return loc
 }
 
+func locationTextBytes(loc Location) int {
+	return len(loc.CountryCode) + len(loc.Country) + len(loc.Region) + len(loc.City)
+}
+
 func (r *Resolver) cacheLocation(addr netip.Addr, loc Location) {
-	textBytes := len(loc.CountryCode) + len(loc.Country) + len(loc.Region) + len(loc.City)
+	textBytes := locationTextBytes(loc)
+	if textBytes > maxCacheTextBytes {
+		return
+	}
 	r.cacheMu.Lock()
 	defer r.cacheMu.Unlock()
 	if _, exists := r.cache[addr]; exists {
 		return
 	}
-	if len(r.cache) >= maxCacheEntries || r.cacheTextBytes+textBytes > maxCacheTextBytes {
-		clear(r.cache)
-		r.cacheTextBytes = 0
+	for len(r.cache) >= maxCacheEntries || r.cacheTextBytes+textBytes > maxCacheTextBytes {
+		oldest := r.cacheOrder[r.cacheHead]
+		r.cacheTextBytes -= locationTextBytes(r.cache[oldest])
+		delete(r.cache, oldest)
+		r.cacheOrder[r.cacheHead] = netip.Addr{}
+		r.cacheHead = (r.cacheHead + 1) % len(r.cacheOrder)
 	}
+	if len(r.cache) == len(r.cacheOrder) {
+		order := make([]netip.Addr, min(maxCacheEntries, max(16, 2*len(r.cacheOrder))))
+		n := copy(order, r.cacheOrder[r.cacheHead:])
+		copy(order[n:], r.cacheOrder[:r.cacheHead])
+		r.cacheOrder = order
+		r.cacheHead = 0
+	}
+	slot := (r.cacheHead + len(r.cache)) % len(r.cacheOrder)
+	r.cacheOrder[slot] = addr
 	r.cache[addr] = loc
 	r.cacheTextBytes += textBytes
 }

@@ -178,3 +178,48 @@ func FuzzBoundedCSV(f *testing.F) {
 		}
 	})
 }
+
+func TestBinaryCacheEvictsOldestWithoutFlushing(t *testing.T) {
+	r := &Resolver{cache: make(map[netip.Addr]Location)}
+	address := func(n int) netip.Addr {
+		return netip.AddrFrom4([4]byte{8, byte(n >> 16), byte(n >> 8), byte(n)})
+	}
+	location := Location{Found: true, City: "city"}
+	for i := range maxCacheEntries + 32 {
+		r.cacheLocation(address(i), location)
+	}
+	if len(r.cache) != maxCacheEntries || len(r.cacheOrder) != maxCacheEntries ||
+		r.cacheTextBytes != maxCacheEntries*len(location.City) {
+		t.Fatal("cache exceeded its limits")
+	}
+	if _, exists := r.cache[address(31)]; exists {
+		t.Fatal("oldest address survived eviction")
+	}
+	if _, exists := r.cache[address(32)]; !exists {
+		t.Fatal("a surviving entry was flushed")
+	}
+	if _, exists := r.cache[address(maxCacheEntries+31)]; !exists {
+		t.Fatal("latest address was not cached")
+	}
+}
+
+func TestBinaryLookupRejectsInvalidFieldLength(t *testing.T) {
+	resolver, path := binaryCSV(t, "134744064,134744319,US,X,Y,Z,1,2\n", 4)
+	if got := resolver.Lookup("8.8.8.8"); got.CountryCode != "US" || got.City != "Z" {
+		t.Fatalf("unexpected valid metadata: %+v", got)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var length [2]byte
+	binary.LittleEndian.PutUint16(length[:], maxGeoRecordBytes)
+	_, err = f.WriteAt(length[:], int64(resolver.metadataStart))
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolver.Lookup("8.8.8.8"); got.Found {
+		t.Fatalf("invalid length returned a location: %+v", got)
+	}
+}

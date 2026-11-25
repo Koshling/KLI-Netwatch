@@ -26,18 +26,14 @@ type overview struct {
 
 func newOverview(start, end time.Time) *overview { return &overview{start: start, end: end} }
 
-func (o *overview) record(e event.AccessEvent, opts GeoOptions, category classifier.Category) {
-	fraction := float64(e.Time.Sub(o.start)) / float64(o.end.Sub(o.start))
+func (o *overview) record(when time.Time, loc clientLocation, category classifier.Category) {
+	fraction := float64(when.Sub(o.start)) / float64(o.end.Sub(o.start))
 	o.timeline[min(119, max(0, int(fraction*120)))]++
-	if opts.Resolver == nil {
+	if !loc.found {
 		return
 	}
-	loc := opts.Resolver.Lookup(e.ClientIP)
-	if !loc.Found {
-		return
-	}
-	x := min(179, max(0, int((loc.Longitude+180)/2)))
-	y := min(89, max(0, int((90-loc.Latitude)/2)))
+	x := min(179, max(0, int((loc.longitude+180)/2)))
+	y := min(89, max(0, int((90-loc.latitude)/2)))
 	index := 0
 	if category == classifier.Bot {
 		index = 1
@@ -120,9 +116,10 @@ func (s *Session) RunInterval(ctx context.Context, scan func(context.Context, fu
 
 func (s *Session) showOverview(ctx context.Context, d *Dashboard, keys <-chan rune, skipped int) error {
 	d.clearScreen = true
-	counts := map[classifier.Category]int{}
-	for _, category := range d.clients {
-		counts[category]++
+	counts := map[classifier.Category]int{
+		classifier.User:   len(d.clients) - d.bots - d.threats,
+		classifier.Bot:    d.bots,
+		classifier.Threat: d.threats,
 	}
 	dirty := true
 	tick := time.NewTicker(350 * time.Millisecond)
