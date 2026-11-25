@@ -49,22 +49,72 @@ func (o *overview) record(e event.AccessEvent, opts GeoOptions, category classif
 	o.located++
 }
 
-func RunInterval(ctx context.Context, scan func(context.Context, func(event.AccessEvent) error) (int, error), opts GeoOptions, start, end time.Time) error {
+func (s *Session) RunInterval(ctx context.Context, scan func(context.Context, func(event.AccessEvent) error) (int, error), opts GeoOptions, start, end time.Time) error {
+	s.open()
 	d := newDashboard(opts)
 	d.intervalOnly = true
 	d.overview = newOverview(start, end)
-	skipped, err := scan(ctx, func(e event.AccessEvent) error { d.add(e); return nil })
-	if err != nil {
-		return err
+
+	// Keep navigation available during scans, and wait for the scanner before
+	// handing control back to the caller that owns the log file.
+	scanCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	var result scanResult
+	go func() {
+		defer close(done)
+		result.skipped, result.err = scan(scanCtx, func(e event.AccessEvent) error {
+			d.add(e)
+			return nil
+		})
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	keys := s.keys
+	var view screen
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		w, h := terminalSize()
+		t := themes[s.themeIndex]
+		rows := []string{fitANSI(t.Accent+"INTERVAL  [M] Menu  [Q] Exit", w)}
+		if h > 1 {
+			rows = append(rows, fitANSI(t.UI+"Scanning historical log...", w))
+		}
+		if err := view.writeFrame(rows, Layout{Width: w, Height: h}, t); err != nil {
+			return err
+		}
+		select {
+		case <-done:
+			if ctx.Err() != nil {
+				return nil
+			}
+			if result.err != nil {
+				return result.err
+			}
+			d.themeIndex = s.themeIndex
+			return s.showOverview(ctx, d, keys, result.skipped)
+		case <-ctx.Done():
+			return nil
+		case key, ok := <-keys:
+			if !ok || key == 'q' || key == 'Q' {
+				return nil
+			}
+			switch key {
+			case 'm', 'M':
+				return ErrMenu
+			case '1', '2', '3', '4', '5':
+				s.selectTheme(key)
+				view.clearScreen = true
+			}
+		case <-tick.C:
+		}
 	}
-	keys, restore := keyboardInput()
-	defer restore()
-	fmt.Print("\033[?25l")
-	defer fmt.Print("\033[?25h\033[0m\n")
-	return d.showOverview(ctx, keys, skipped)
 }
 
-func (d *Dashboard) showOverview(ctx context.Context, keys <-chan byte, skipped int) error {
+func (s *Session) showOverview(ctx context.Context, d *Dashboard, keys <-chan rune, skipped int) error {
 	d.clearScreen = true
 	counts := map[classifier.Category]int{}
 	for _, category := range d.clients {
@@ -89,12 +139,15 @@ func (d *Dashboard) showOverview(ctx context.Context, keys <-chan byte, skipped 
 			if !ok || k == 'q' || k == 'Q' {
 				return nil
 			}
+			if k == 'm' || k == 'M' {
+				return ErrMenu
+			}
 			if (k == 'l' || k == 'L') && d.geoOptions.ServerSet {
 				d.overview.routes = (d.overview.routes + 1) % 4
 				dirty = true
 			}
 			if k >= '1' && k <= '5' && int(k-'1') != d.themeIndex {
-				d.themeIndex = int(k - '1')
+				d.themeIndex = s.selectTheme(k)
 				d.clearScreen = true
 			}
 		case <-tick.C:
@@ -113,7 +166,8 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	}
 	put(0, t.Accent+"Interval Overview")
 	if w < 59 || h < 18 {
-		put(1, "Resize to 60x18 or larger")
+		put(1, "[M] Menu  [Q] Exit")
+		put(2, "Resize to 60x18 or larger")
 		return rows
 	}
 	put(1, t.Muted+strings.Repeat("═", w))
@@ -237,12 +291,12 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	}
 	put(h-3, t.UI+fmt.Sprintf("Requests %d   Clients %d   Mapped %d   Skipped lines %d", d.total, len(d.clients), o.located, skipped))
 	put(h-2, t.Muted+strings.Repeat("═", w))
-	controls := "[Q] Exit   [1-5] Themes   " + t.Name
+	controls := "[M] Menu   [Q] Exit   "
 	if serverCell >= 0 {
 		state := [...]string{"off", "dots", "braille", "efficient"}[o.routes]
-		controls = "[L] Lines " + state + "   " + controls
+		controls += "[L] Lines " + state + "   "
 	}
-	put(h-1, t.Accent+controls)
+	put(h-1, t.Accent+controls+"[1-5] Themes   "+t.Name)
 	return rows
 }
 func peakIfTraffic(peak, total int) int {

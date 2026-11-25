@@ -119,16 +119,7 @@ func TestSeekMatchesChronologicalPass(t *testing.T) {
 	}
 }
 
-func TestSeekKeysAndProfileBoundaries(t *testing.T) {
-	for keys, want := range map[string]byte{"[": '[', "]": ']', "\x1b[D": '[', "\x1bOC": ']'} {
-		var state, got byte
-		for _, key := range []byte(keys) {
-			got = decodeSeekKey(&state, key)
-		}
-		if got != want {
-			t.Fatalf("key %q decoded as %q", keys, got)
-		}
-	}
+func TestReplayProfileBoundaries(t *testing.T) {
 	c := replayClock{globeSpeedIndex: 2}
 	c.changeSpeed(time.Now(), -1)
 	if c.speed() != 1 || c.globeSpeed() != 2 {
@@ -177,7 +168,7 @@ func TestReplayFrameFits80x24(t *testing.T) {
 			}
 		}
 		if !strings.HasSuffix(strings.TrimRight(frame[22], " "), "Themes 1-5") || !strings.HasSuffix(strings.TrimRight(frame[23], " "), "THEME: "+theme.Name) ||
-			!strings.Contains(frame[22], "[+/-] speed") || !strings.Contains(frame[23], "[Q] Exit") {
+			!strings.Contains(frame[22], "[+/-] speed") || !strings.Contains(frame[23], "[Q] Exit") || !strings.Contains(frame[23], "[M] Menu") {
 			t.Fatalf("theme %s: footer controls or labels missing", theme.Name)
 		}
 	}
@@ -190,7 +181,7 @@ func TestLiveFooterAndFeed(t *testing.T) {
 		t.Fatal("Live event feed title changed")
 	}
 	if !strings.Contains(frame[22], "[1] MONO") ||
-		!strings.Contains(frame[23], "[Q] Exit") {
+		!strings.Contains(frame[23], "[Q] Exit") || !strings.Contains(frame[23], "[M] Menu") {
 		t.Fatal("Live footer changed")
 	}
 }

@@ -1,8 +1,14 @@
 package dashboard
 
 import (
+	"bufio"
+	"errors"
+	"io"
 	"os"
+	"os/exec"
+	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -28,4 +34,116 @@ func terminalSize() (int, int) {
 	}
 
 	return int(ws.Cols), int(ws.Rows)
+}
+
+const (
+	keyUp rune = -1 - iota
+	keyDown
+	keyLeft
+	keyRight
+	keyEscape
+)
+
+func keyboardInput() (<-chan rune, func()) {
+	info, err := os.Stdin.Stat()
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return nil, func() {}
+	}
+	getState := exec.Command("stty", "-g")
+	getState.Stdin = os.Stdin
+	state, err := getState.Output()
+	if err != nil {
+		return nil, func() {}
+	}
+
+	// Reopen the terminal with a separate file description. Go can then
+	// interrupt reads on close and set a deadline without changing stdin's flags.
+	input, err := os.OpenFile("/proc/self/fd/0", os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, func() {}
+	}
+	setMode := exec.Command("stty", "-echo", "-icanon", "min", "1", "time", "0")
+	setMode.Stdin, setMode.Stdout, setMode.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := setMode.Run(); err != nil {
+		input.Close()
+		return nil, func() {}
+	}
+
+	keys := make(chan rune)
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer close(keys)
+		reader := bufio.NewReader(input)
+		for {
+			key, err := readKey(reader, input)
+			if err != nil {
+				return
+			}
+			if key != 0 {
+				select {
+				case keys <- key:
+				case <-done:
+					return
+				}
+			}
+		}
+	}()
+	return keys, func() {
+		close(done)
+		input.Close()
+		<-finished
+		restore := exec.Command("stty", strings.TrimSpace(string(state)))
+		restore.Stdin, restore.Stdout, restore.Stderr = os.Stdin, os.Stdout, os.Stderr
+		_ = restore.Run()
+	}
+}
+
+func readKey(reader *bufio.Reader, input *os.File) (rune, error) {
+	key, _, err := reader.ReadRune()
+	if err != nil || key != 27 {
+		return key, err
+	}
+
+	// A short deadline distinguishes a standalone Esc from an arrow sequence.
+	_ = input.SetReadDeadline(time.Now().Add(80 * time.Millisecond))
+	defer input.SetReadDeadline(time.Time{})
+	prefix, _, err := reader.ReadRune()
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, io.EOF) {
+		return keyEscape, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if prefix != '[' && prefix != 'O' {
+		_ = reader.UnreadRune()
+		return keyEscape, nil
+	}
+	for {
+		key, _, err := reader.ReadRune()
+		if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, io.EOF) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		switch key {
+		case 'A':
+			return keyUp, nil
+		case 'B':
+			return keyDown, nil
+		case 'C':
+			return keyRight, nil
+		case 'D':
+			return keyLeft, nil
+		case 'M':
+			if prefix == 'O' { // Application keypad Enter.
+				return '\r', nil
+			}
+		}
+		if key < 0x20 || key >= 0x40 {
+			return 0, nil
+		}
+	}
 }

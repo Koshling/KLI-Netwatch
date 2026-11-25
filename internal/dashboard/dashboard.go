@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -31,6 +30,7 @@ type geoKey struct {
 }
 
 type Dashboard struct {
+	screen
 	overview         *overview
 	replayStatus     string
 	replayGlobeSpeed int
@@ -49,45 +49,38 @@ type Dashboard struct {
 	currentCount  int
 	rates         []int
 
-	themeIndex  int
-	clearScreen bool
+	themeIndex     int
 	hideGeoOverlay bool
-	intervalOnly bool
-	prevFrame   []string
-	prevWidth   int
-	prevHeight  int
+	intervalOnly   bool
 
 	geoOptions GeoOptions
 	geoSeen    map[string]*geoKey
 	geoMarkers map[geoKey]int
 	signals    []geoMarker
 	signalCap  int
-	pending []geoMarker
-	recent []geoMarker
+	pending    []geoMarker
+	recent     []geoMarker
 }
 
-func Run(ctx context.Context, events <-chan event.AccessEvent) error {
-	return RunWithGeo(ctx, events, GeoOptions{})
-}
-
-func RunWithGeo(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions) error {
-	return run(ctx, events, options, nil)
+func (s *Session) RunLive(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions) error {
+	return s.run(ctx, events, options, nil)
 }
 
 func newDashboard(options GeoOptions) *Dashboard {
 	return &Dashboard{
-		clients:     make(map[string]classifier.Category),
-		classifier:  classifier.New(),
-		rates:       make([]int, 120),
-		clearScreen: true,
-		geoOptions:  options,
-		geoSeen:     make(map[string]*geoKey),
-		geoMarkers:  make(map[geoKey]int),
+		clients:    make(map[string]classifier.Category),
+		classifier: classifier.New(),
+		rates:      make([]int, 120),
+		geoOptions: options,
+		geoSeen:    make(map[string]*geoKey),
+		geoMarkers: make(map[geoKey]int),
 	}
 }
 
-func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions, replay *replayClock) error {
+func (s *Session) run(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions, replay *replayClock) error {
+	s.open()
 	d := newDashboard(options)
+	d.themeIndex = s.themeIndex
 	layout := calculateLayout(terminalSize())
 	d.signalCap = signalLimit(layout.GlobeWidth, layout.GlobeHeight)
 	var stream *replayStream
@@ -100,17 +93,12 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 	if replay != nil {
 		d.overview = newOverview(replay.start, replay.end)
 	}
-	var escape byte
 	var shown time.Time
 	if replay != nil {
 		shown = replay.start
 	}
 
-	keys, restore := keyboardInput()
-	defer restore()
-
-	fmt.Print("\033[?25l")
-	defer fmt.Print("\033[?25h\033[0m\n")
+	keys := s.keys
 
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
@@ -192,14 +180,11 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				continue
 			}
 
-			if replay != nil {
-				key = decodeSeekKey(&escape, key)
-			}
 			switch key {
-			case '[', ']':
+			case '[', ']', keyLeft, keyRight:
 				if replay != nil {
 					step := time.Minute
-					if key == '[' {
+					if key == '[' || key == keyLeft {
 						step = -step
 					}
 					target := replay.seekTarget(shown, step)
@@ -227,7 +212,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				}
 			case '1', '2', '3', '4', '5':
 				// Reapply the theme background to the live summary after a partial update.
-				d.themeIndex = int(key - '1')
+				d.themeIndex = s.selectTheme(key)
 				d.clearScreen = true
 			case 'f', 'F':
 				d.hideGeoOverlay = !d.hideGeoOverlay
@@ -251,6 +236,8 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 				if replay != nil {
 					replay.globeSpeedIndex = max(replay.globeSpeedIndex-1, 0)
 				}
+			case 'm', 'M':
+				return ErrMenu
 			case 'q', 'Q':
 				return nil
 			}
@@ -277,7 +264,7 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 						endSince = now
 					}
 					if now.Sub(endSince) >= 5*time.Second {
-						return d.showOverview(ctx, keys, replay.skipped)
+						return s.showOverview(ctx, d, keys, replay.skipped)
 					}
 				} else {
 					endSince = time.Time{}
@@ -298,83 +285,6 @@ func run(ctx context.Context, events <-chan event.AccessEvent, options GeoOption
 			ready = nil
 		}
 	}
-}
-
-// Terminals encode arrows as ESC [ D/C or ESC O D/C.
-func decodeSeekKey(state *byte, key byte) byte {
-	if key == 27 {
-		*state = 1
-		return 0
-	}
-	if *state == 1 && (key == '[' || key == 'O') {
-		*state = 2
-		return 0
-	}
-	if *state == 2 {
-		*state = 0
-		switch key {
-		case 'D':
-			return '['
-		case 'C':
-			return ']'
-		}
-		return 0
-	}
-	*state = 0
-	return key
-}
-
-func keyboardInput() (<-chan byte, func()) {
-	info, err := os.Stdin.Stat()
-	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
-		return nil, func() {}
-	}
-
-	getState := exec.Command("stty", "-g")
-	getState.Stdin = os.Stdin
-	state, err := getState.Output()
-	if err != nil {
-		return nil, func() {}
-	}
-
-	oldState := strings.TrimSpace(string(state))
-
-	setMode := exec.Command("stty", "-echo", "-icanon", "min", "1", "time", "0")
-	setMode.Stdin = os.Stdin
-	setMode.Stdout = os.Stdout
-	setMode.Stderr = os.Stderr
-	if err := setMode.Run(); err != nil {
-		return nil, func() {}
-	}
-
-	restore := func() {
-		cmd := exec.Command("stty", oldState)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		_ = cmd.Run()
-	}
-
-	keys := make(chan byte, 16)
-
-	go func() {
-		defer close(keys)
-		var input [1]byte
-
-		for {
-			_, err := os.Stdin.Read(input[:])
-			if err != nil {
-				return
-			}
-
-			select {
-			case keys <- input[0]:
-			default:
-			}
-		}
-	}()
-
-	return keys, restore
 }
 
 func (d *Dashboard) add(e event.AccessEvent) {
@@ -504,7 +414,9 @@ func fitANSI(s string, width int) string {
 
 func (d *Dashboard) render() error {
 	frame, layout := d.frame(terminalSize())
-	return d.writeFrame(frame, layout, themes[d.themeIndex])
+	// Dashboard rows already fill the screen width, including trailing spaces.
+	// Overwrite them directly so a terminal never paints a blank row first.
+	return d.writeRows(frame, layout, themes[d.themeIndex], false)
 }
 
 func (d *Dashboard) frame(width, height int) ([]string, Layout) {
@@ -707,10 +619,10 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 	if d.hideGeoOverlay {
 		geoToggle = "[F] Overlay off"
 	}
-	footer := fitANSI(t.UI+geoToggle+"  [Q] Exit", l.Width)
+	footer := fitANSI(t.UI+"[M] Menu  [Q] Exit  "+geoToggle, l.Width)
 	if replay {
 		controls = withRightLabel(t.Accent+d.replayStatus, "Themes 1-5", t.Accent, l.Width)
-		globe := fmt.Sprintf("%s  [g/G] %dx  [<-/->] ±1m  [Q] Exit", geoToggle, d.replayGlobeSpeed)
+		globe := fmt.Sprintf("[M] Menu [Q] Exit %s [g/G] %dx [←/→] ±1m", geoToggle, d.replayGlobeSpeed)
 		footer = withRightLabel(t.UI+globe, "THEME: "+t.Name, t.Accent, l.Width)
 	}
 	frame = append(frame, controls, footer)
@@ -732,12 +644,24 @@ var reverseMonoSpans = strings.NewReplacer(
 	"\033[31m", "\033[1;30;47m", // Threat
 )
 
-func (d *Dashboard) writeFrame(frame []string, l Layout, t Theme) error {
-	geometryChanged := d.prevWidth != l.Width ||
-		d.prevHeight != l.Height ||
-		len(d.prevFrame) != len(frame)
+// screen caches the last frame so that unchanged rows need no terminal writes.
+type screen struct {
+	clearScreen bool
+	prevFrame   []string
+	prevWidth   int
+	prevHeight  int
+}
 
-	fullRedraw := d.clearScreen || geometryChanged
+func (s *screen) writeFrame(frame []string, l Layout, t Theme) error {
+	return s.writeRows(frame, l, t, true)
+}
+
+func (s *screen) writeRows(frame []string, l Layout, t Theme, eraseRows bool) error {
+	geometryChanged := s.prevWidth != l.Width ||
+		s.prevHeight != l.Height ||
+		len(s.prevFrame) != len(frame)
+
+	fullRedraw := s.clearScreen || geometryChanged
 	var b strings.Builder
 
 	if fullRedraw {
@@ -748,13 +672,15 @@ func (d *Dashboard) writeFrame(frame []string, l Layout, t Theme) error {
 	}
 
 	for i, line := range frame {
-		if !fullRedraw && d.prevFrame[i] == line {
+		if !fullRedraw && s.prevFrame[i] == line {
 			continue
 		}
 
 		fmt.Fprintf(&b, "\033[%d;1H", i+1)
 		b.WriteString(t.UI)
-		b.WriteString("\033[K")
+		if eraseRows {
+			b.WriteString("\033[K")
+		}
 		if t.Name == "REVERSE MONO" {
 			reverseMonoSpans.WriteString(&b, line)
 		} else {
@@ -770,10 +696,10 @@ func (d *Dashboard) writeFrame(frame []string, l Layout, t Theme) error {
 		return err
 	}
 
-	d.prevFrame = append(d.prevFrame[:0], frame...)
-	d.prevWidth = l.Width
-	d.prevHeight = l.Height
-	d.clearScreen = false
+	s.prevFrame = append(s.prevFrame[:0], frame...)
+	s.prevWidth = l.Width
+	s.prevHeight = l.Height
+	s.clearScreen = false
 
 	return nil
 }
