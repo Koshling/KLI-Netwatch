@@ -93,9 +93,8 @@ func parseEnvoy(line string) (AccessEvent, error) {
 	if err != nil {
 		return AccessEvent{}, err
 	}
-	// The default format only includes the forwarded header. It may be absent.
-	first, _, _ := strings.Cut(e.XForwardedFor, ",")
-	e.ClientIP = parseAddress(first)
+	// Envoy's default text has no trusted client address. Keep the header as
+	// metadata and leave ClientIP unset for per-client accounting and filters.
 	e.Status, err = loggedStatus(match[3])
 	if err != nil {
 		return AccessEvent{}, err

@@ -39,8 +39,12 @@ func (o *overview) record(e event.AccessEvent, opts GeoOptions, category classif
 	x := min(179, max(0, int((loc.Longitude+180)/2)))
 	y := min(89, max(0, int((90-loc.Latitude)/2)))
 	index := 0
-	if category == classifier.Bot { index = 1 }
-	if category == classifier.Threat { index = 2 }
+	if category == classifier.Bot {
+		index = 1
+	}
+	if category == classifier.Threat {
+		index = 2
+	}
 	band := y / densityBandHeight
 	if o.world[band] == nil {
 		o.world[band] = new([densityBandHeight][180]density)
@@ -232,7 +236,11 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	for i, name := range []string{"2xx", "3xx", "4xx", "5xx", "other"} {
 		lines = append(lines, fmt.Sprintf("%-5s %d", name, d.statusCounts[i]))
 	}
-	lines = append(lines, t.heading()+"FINAL CLIENTS", fmt.Sprintf("USER %d", counts[classifier.User]), fmt.Sprintf("BOT %d", counts[classifier.Bot]), fmt.Sprintf("THREAT %d", counts[classifier.Threat]))
+	clientHeading := "FINAL CLIENTS"
+	if d.clientsLimited {
+		clientHeading = "TRACKED CLIENTS"
+	}
+	lines = append(lines, t.heading()+clientHeading, fmt.Sprintf("USER %d", counts[classifier.User]), fmt.Sprintf("BOT %d", counts[classifier.Bot]), fmt.Sprintf("THREAT %d", counts[classifier.Threat]))
 	for i := 0; i < h-6; i++ {
 		var l string
 		switch {
@@ -267,7 +275,9 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 			l = b.String()
 		case i == height+1:
 			l = t.Data + "* 1-9   @ 10+ requests"
-			if serverCell >= 0 { l += "   S server" }
+			if serverCell >= 0 {
+				l += "   S server"
+			}
 		case i == height+2:
 			l = t.heading() + "RECENT REQUESTS"
 
@@ -289,7 +299,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		}
 		put(i+3, fitANSI(t.UI+l, left)+t.Muted+" │ "+t.UI+r)
 	}
-	put(h-3, t.UI+fmt.Sprintf("Requests %d   Clients %d   Mapped %d   Skipped lines %d", d.total, len(d.clients), o.located, skipped))
+	put(h-3, t.UI+fmt.Sprintf("Requests %d   Clients %s   Mapped %d   Skipped lines %d", d.total, d.clientsLabel(), o.located, skipped))
 	put(h-2, t.Muted+strings.Repeat("═", w))
 	controls := "[M] Menu   [Q] Exit   "
 	if serverCell >= 0 {
@@ -308,63 +318,81 @@ func peakIfTraffic(peak, total int) int {
 
 type density [3]int
 
-func (d density) total() int { return d[0]+d[1]+d[2] }
+func (d density) total() int { return d[0] + d[1] + d[2] }
 func (d *density) add(other density) {
-	for i, n := range other { d[i] += n }
+	for i, n := range other {
+		d[i] += n
+	}
 }
 
 type routeGroup struct {
-	counts density
+	counts     density
 	xSum, ySum float64
-	cells []int
+	cells      []int
 }
 
 func overviewRoutes(grid []density, width, height, server int, braille bool) []globeCell {
 	// Group 6 columns by 3 rows, accounting for the shape of terminal cells.
-	stride := (width+5)/6
+	stride := (width + 5) / 6
 	groups := make([]routeGroup, stride*((height+2)/3))
 	for cell, counts := range grid {
 		n := counts.total()
-		if n == 0 || cell == server { continue }
+		if n == 0 || cell == server {
+			continue
+		}
 		x, y := cell%width, cell/width
 		g := &groups[(y/3)*stride+x/6]
 		g.counts.add(counts)
-		g.xSum += float64(x)*float64(n)
-		g.ySum += float64(y)*float64(n)
+		g.xSum += float64(x) * float64(n)
+		g.ySum += float64(y) * float64(n)
 		g.cells = append(g.cells, cell)
 	}
-	sort.SliceStable(groups, func(i,j int) bool { return groups[i].counts.total() > groups[j].counts.total() })
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].counts.total() > groups[j].counts.total() })
 	mask := make([]globeCell, len(grid))
 	cols, rows := 1, 1
-	if braille { cols, rows = 2, 4 }
+	if braille {
+		cols, rows = 2, 4
+	}
 	bits := [4][2]rune{{1, 8}, {2, 16}, {4, 32}, {64, 128}}
-	for _, g := range groups[:min(len(groups), signalLimit(width,height))] {
+	for _, g := range groups[:min(len(groups), signalLimit(width, height))] {
 		total := float64(g.counts.total())
-		if total == 0 { break }
+		if total == 0 {
+			break
+		}
 		cx, cy := g.xSum/total, g.ySum/total
 		cell, best := 0, math.Inf(1)
 		for _, candidate := range g.cells {
 			dx, dy := float64(candidate%width)-cx, 2*(float64(candidate/width)-cy)
-			if distance := dx*dx+dy*dy; distance < best {
+			if distance := dx*dx + dy*dy; distance < best {
 				cell, best = candidate, distance
 			}
 		}
 		category := classifier.User
-		if g.counts[1] > g.counts[0] { category = classifier.Bot }
-		if g.counts[2] >= max(g.counts[0],g.counts[1]) { category = classifier.Threat }
+		if g.counts[1] > g.counts[0] {
+			category = classifier.Bot
+		}
+		if g.counts[2] >= max(g.counts[0], g.counts[1]) {
+			category = classifier.Threat
+		}
 		x, y := cell%width, cell/width
 		dx, dy := server%width-x, server/width-y
-		if dx > width/2 { dx -= width }
-		if dx < -width/2 { dx += width }
+		if dx > width/2 {
+			dx -= width
+		}
+		if dx < -width/2 {
+			dx += width
+		}
 		x, y = x*cols+cols/2, y*rows+rows/2
 		dx, dy = dx*cols, dy*rows
 		steps := max(dx, -dx, dy, -dy)
 		for i := 1; i < steps; i++ {
-			f := float64(i)/float64(steps)
-			col := (width*cols+x+int(math.Round(float64(dx)*f)))%(width*cols)
-			row := y+int(math.Round(float64(dy)*f))
+			f := float64(i) / float64(steps)
+			col := (width*cols + x + int(math.Round(float64(dx)*f))) % (width * cols)
+			row := y + int(math.Round(float64(dy)*f))
 			index := (row/rows)*width + col/cols
-			if mask[index].category == "" { mask[index].category = category }
+			if mask[index].category == "" {
+				mask[index].category = category
+			}
 			if braille {
 				mask[index].glyph |= 0x2800 | bits[row%4][col%2]
 			} else {

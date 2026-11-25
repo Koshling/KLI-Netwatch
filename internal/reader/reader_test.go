@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -253,5 +255,32 @@ func TestTruncateAndRegrow(t *testing.T) {
 	}
 	if len(lines) != 2 || lines[1] != "new longer line" {
 		t.Fatal(lines)
+	}
+}
+
+func TestFollowRejectsFIFOAfterRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "access.log")
+	if err := os.WriteFile(path, []byte("ready\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	r := New(path, 1024, time.Millisecond)
+	done := make(chan error, 1)
+	go func() {
+		done <- r.Follow(ctx, false, func(string) error {
+			if err := os.Rename(path, path+".old"); err != nil {
+				return err
+			}
+			return syscall.Mkfifo(path, 0600)
+		})
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Fatalf("got %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("reader blocked on replacement")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"netwatch/internal/event"
+	"netwatch/internal/regularfile"
 )
 
 // Scan reads complete lines within the size observed at entry.
@@ -17,18 +18,11 @@ func Scan(ctx context.Context, path, format string, limit int, from, until time.
 	if limit < 1 || !from.Before(until) {
 		return 0, fmt.Errorf("invalid line limit or interval")
 	}
-	f, err := os.Open(path)
+	f, info, err := regularfile.Open(path)
 	if err != nil {
 		return 0, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
-	if !info.Mode().IsRegular() {
-		return 0, fmt.Errorf("expected regular log file")
-	}
 	parse, err := event.NewAccessParser(format, "", "", nil)
 	if err != nil {
 		return 0, err

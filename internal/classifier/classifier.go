@@ -8,6 +8,9 @@ import (
 	"netwatch/internal/event"
 )
 
+// MaxClients bounds per-session classification and distinct-client accounting.
+const MaxClients = 65536
+
 type Category string
 
 const (
@@ -53,6 +56,19 @@ func classifyEvent(e event.AccessEvent, state *clientState, now time.Time) Categ
 		}
 	}
 
+	if state != nil && errorBurst(e, state, now) {
+		return Threat
+	}
+	ua := strings.ToLower(e.UserAgent)
+	for _, agent := range botAgents {
+		if strings.Contains(ua, agent) {
+			return Bot
+		}
+	}
+	return User
+}
+
+func errorBurst(e event.AccessEvent, state *clientState, now time.Time) bool {
 	// Высокая частота сама по себе не делает клиента угрозой.
 	// Учитываем её только вместе с серией ответов 403/404.
 	// Only the most recent 40 timestamps can establish the threshold.
@@ -73,13 +89,19 @@ func classifyEvent(e event.AccessEvent, state *clientState, now time.Time) Categ
 			}
 		}
 	}
-	if len(state.requests) < 40 {
+	const burstSize = 40
+	if len(state.requests) < burstSize {
+		if len(state.requests) == cap(state.requests) && cap(state.requests) > burstSize/2 {
+			requests := make([]int64, len(state.requests), burstSize)
+			copy(requests, state.requests)
+			state.requests = requests
+		}
 		state.requests = append(state.requests, stamp)
 	} else {
 		state.requests[state.next] = stamp
-		state.next = (state.next + 1) % 40
+		state.next = (state.next + 1) % burstSize
 	}
-	if len(state.requests) == 40 && (e.Status == 403 || e.Status == 404) {
+	if len(state.requests) == burstSize && (e.Status == 403 || e.Status == 404) {
 		// Log entries may arrive out of order. Check both ends of the window.
 		burst := true
 		for _, previous := range state.requests {
@@ -89,18 +111,10 @@ func classifyEvent(e event.AccessEvent, state *clientState, now time.Time) Categ
 			}
 		}
 		if burst {
-			return Threat
+			return true
 		}
 	}
-
-	ua := strings.ToLower(e.UserAgent)
-	for _, agent := range botAgents {
-		if strings.Contains(ua, agent) {
-			return Bot
-		}
-	}
-
-	return User
+	return false
 }
 
 func expired(now, previous int64) bool {
@@ -132,6 +146,9 @@ func (c *Classifier) Classify(e event.AccessEvent) Category {
 
 	state := c.clients[e.ClientIP]
 	if state == nil {
+		if len(c.clients) >= MaxClients {
+			return classifyEvent(e, nil, now)
+		}
 		state = &clientState{category: User}
 		c.clients[e.ClientIP] = state
 	}

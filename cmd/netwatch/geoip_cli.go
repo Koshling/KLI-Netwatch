@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"netwatch/internal/geoip"
 )
@@ -49,10 +53,12 @@ func runGeoIPCLI(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "family must be 4 or 6")
 		return 2
 	}
-	if err := geoip.ConvertCSV(*input, *output, *family); err != nil {
-		fmt.Fprintln(stderr, "Conversion failed:", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := geoip.ConvertCSVContext(ctx, *input, *output, *family); err != nil {
+		fmt.Fprintln(stderr, "Conversion failed:", cleanDiagnostic(err.Error()))
 		return 1
 	}
-	fmt.Fprintln(stdout, "Created NWGEO database:", *output)
+	fmt.Fprintln(stdout, "Created NWGEO database:", cleanDiagnostic(*output))
 	return 0
 }

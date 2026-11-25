@@ -6,7 +6,9 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"netwatch/internal/classifier"
@@ -39,6 +41,8 @@ type Dashboard struct {
 	success          int
 	errors           int
 	clients          map[string]classifier.Category
+	clientsLimited   bool
+	skippedLive      *atomic.Uint64
 	classifier       *classifier.Classifier
 	feed             []feedEvent
 	feedStart        int
@@ -62,8 +66,8 @@ type Dashboard struct {
 	recent     []geoMarker
 }
 
-func (s *Session) RunLive(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions) error {
-	return s.run(ctx, events, options, nil)
+func (s *Session) RunLive(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions, skipped *atomic.Uint64) error {
+	return s.run(ctx, events, options, nil, skipped)
 }
 
 func newDashboard(options GeoOptions) *Dashboard {
@@ -77,9 +81,10 @@ func newDashboard(options GeoOptions) *Dashboard {
 	}
 }
 
-func (s *Session) run(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions, replay *replayClock) error {
+func (s *Session) run(ctx context.Context, events <-chan event.AccessEvent, options GeoOptions, replay *replayClock, skipped *atomic.Uint64) error {
 	s.open()
 	d := newDashboard(options)
+	d.skippedLive = skipped
 	d.themeIndex = s.themeIndex
 	layout := calculateLayout(terminalSize())
 	d.signalCap = signalLimit(layout.GlobeWidth, layout.GlobeHeight)
@@ -143,7 +148,11 @@ func (s *Session) run(ctx context.Context, events <-chan event.AccessEvent, opti
 		case <-ready:
 			d.updateRate(pending.Time)
 			d.add(*pending)
-			shown = pending.Time
+			// Logs can interleave writes. Keep the playback cursor monotonic
+			// while preserving the recorded time in the feed and overview.
+			if pending.Time.After(shown) {
+				shown = pending.Time
+			}
 			pending = nil
 			ready = nil
 			input = events
@@ -296,8 +305,12 @@ func (d *Dashboard) add(e event.AccessEvent) {
 	d.currentCount++
 
 	if e.ClientIP != "" {
-		previous := d.clients[e.ClientIP]
-		if category != previous {
+		previous, tracked := d.clients[e.ClientIP]
+		if !tracked {
+			tracked = len(d.clients) < classifier.MaxClients
+			d.clientsLimited = d.clientsLimited || !tracked
+		}
+		if tracked && category != previous {
 			switch previous {
 			case classifier.Bot:
 				d.bots--
@@ -319,9 +332,13 @@ func (d *Dashboard) add(e event.AccessEvent) {
 				loc := d.geoOptions.Resolver.Lookup(e.ClientIP)
 				if loc.Found {
 					key = &geoKey{latitude: int(loc.Latitude * 100), longitude: int(loc.Longitude * 100)}
-					d.geoMarkers[*key]++
+					if tracked {
+						d.geoMarkers[*key]++
+					}
 				}
-				d.geoSeen[e.ClientIP] = key
+				if tracked {
+					d.geoSeen[e.ClientIP] = key
+				}
 			}
 			if key != nil {
 				d.startSignal(*key, e.ClientIP, category, e.Time)
@@ -346,8 +363,11 @@ func (d *Dashboard) add(e event.AccessEvent) {
 	}
 
 	item := feedEvent{
-		when: e.Time, clientIP: e.ClientIP, method: e.Method,
-		url: e.URL, status: e.Status, category: category,
+		when: e.Time, clientIP: e.ClientIP, status: e.Status, category: category,
+	}
+	if !d.intervalOnly {
+		item.method = retainFeedText(e.Method)
+		item.url = retainFeedText(e.URL)
 	}
 	if len(d.feed) < feedLimit {
 		d.feed = append(d.feed, item)
@@ -355,6 +375,26 @@ func (d *Dashboard) add(e event.AccessEvent) {
 		d.feed[d.feedStart] = item
 		d.feedStart = (d.feedStart + 1) % feedLimit
 	}
+}
+
+// Keep a bounded copy so a short field cannot retain an entire log line.
+func retainFeedText(text string) string {
+	const maxFeedFieldBytes = 2048
+	if len(text) > maxFeedFieldBytes {
+		end := maxFeedFieldBytes - len("…")
+		for end > 0 && !utf8.RuneStart(text[end]) {
+			end--
+		}
+		return text[:end] + "…"
+	}
+	return strings.Clone(text)
+}
+
+func (d *Dashboard) clientsLabel() string {
+	if d.clientsLimited {
+		return fmt.Sprintf("%d+", len(d.clients))
+	}
+	return fmt.Sprint(len(d.clients))
 }
 
 // feedAt indexes the retained requests from oldest to newest.
@@ -365,7 +405,7 @@ func (d *Dashboard) feedAt(index int) feedEvent {
 // Input from access logs is plain terminal text, including in JSON mode.
 func printableField(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 32 || r >= 127 && r <= 159 {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
 			return '?'
 		}
 		return r
@@ -460,7 +500,11 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		left[i+1] = globe[i]
 	}
 
-	left[l.ContentRows-2] = t.Muted + geoStatus(d.geoOptions, len(d.geoMarkers)) + "\033[0m"
+	geo := geoStatus(d.geoOptions, len(d.geoMarkers))
+	if d.clientsLimited && d.geoOptions.Resolver != nil {
+		geo += "+"
+	}
+	left[l.ContentRows-2] = t.Muted + geo + "\033[0m"
 	serverText := "SERVER: NOT CONFIGURED"
 	if d.geoOptions.ServerSet {
 		serverText = fmt.Sprintf("SERVER: %.2f, %.2f",
@@ -555,9 +599,13 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		leftPanel = 1
 	}
 
+	clientHeading := "CLIENTS BY TYPE"
+	if d.clientsLimited {
+		clientHeading = "TRACKED CLIENT TYPES"
+	}
 	put(fmt.Sprintf("%s%-*s%s │ %s%s",
 		t.heading(), leftPanel, "HTTP STATUS",
-		t.Muted, t.heading(), "CLIENTS BY TYPE"))
+		t.Muted, t.heading(), clientHeading))
 
 	if l.StatusRows == 2 {
 		httpStats := fmt.Sprintf("2:%s 3:%s 4:%s 5:%s O:%s",
@@ -600,10 +648,15 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 	frame := make([]string, 0, l.Height)
 
 	summary := fmt.Sprintf(
-		"%sREQ %d   CLIENTS %d   USER %d   BOT %d   THREAT %d",
-		t.heading(), d.total, len(d.clients),
+		"%sREQ %d   CLIENTS %s   USER %d   BOT %d   THREAT %d",
+		t.heading(), d.total, d.clientsLabel(),
 		userClients, botClients, threatClients,
 	)
+	if d.skippedLive != nil {
+		if count := d.skippedLive.Load(); count > 0 {
+			summary += fmt.Sprintf("   SKIPPED %d", count)
+		}
+	}
 	frame = append(frame, fitANSI(summary, l.Width))
 	frame = append(frame, fitANSI(t.Muted+strings.Repeat("═", l.Width), l.Width))
 

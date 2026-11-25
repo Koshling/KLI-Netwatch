@@ -93,10 +93,10 @@ func SaveGeoSetup(path string, cfg Config) error {
 		return err
 	}
 	defer dir.Close()
-	if err := syscall.Flock(int(dir.Fd()), syscall.LOCK_EX); err != nil {
-		return err
+	if err := syscall.Flock(int(dir.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("lock config directory: %w", err)
 	}
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return err
 	}
@@ -121,15 +121,20 @@ func SaveGeoSetup(path string, cfg Config) error {
 }
 
 func writeSetup(path string, value any, create bool) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	if len(data) >= maxConfigBytes {
+		return fmt.Errorf("config exceeds %d bytes", maxConfigBytes)
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".netwatch-config-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
-	encoder := json.NewEncoder(tmp)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
 		return err
 	}
 	if err := tmp.Sync(); err != nil {

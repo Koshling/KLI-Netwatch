@@ -23,7 +23,7 @@ func TestAccessLogFormats(t *testing.T) {
 		{"apache vhost", "apache-vhost", `example.test:80 2001:db8::1 - - [25/Nov/2026:12:00:00 +0000] "GET /check?q=1 HTTP/2.0" 204 12 "-" "netwatch \"smoke\""`,
 			"2001:db8::1", `netwatch \"smoke\"`},
 		{"envoy default", "envoy", `[2026-11-25T12:00:00.000Z] "GET /check?q=1 HTTP/2" 204 - 0 12 2 - "2001:db8::1, 198.51.100.2" "netwatch "smoke"" "id" "example.test" "127.0.0.1:8080"`,
-			"2001:db8::1", `netwatch "smoke"`},
+			"", `netwatch "smoke"`},
 		{"envoy without forwarded address", "envoy", `[2026-11-25T12:00:00.000Z] "GET /check?q=1 HTTP/2" 204 - 0 12 2 - "-" "netwatch" "id" "example.test" "127.0.0.1:8080"`,
 			"", "netwatch"},
 		{"envoy json", "json", `{"start_time":"2026-11-25T12:00:00Z","downstream_remote_address":"[2001:db8::1]:12345","request":"GET /check?q=1 HTTP/2","response_code":"204","bytes_sent":"12","user_agent":"netwatch"}`,
@@ -159,4 +159,16 @@ func TestNginxIngressTemplate(t *testing.T) {
 	if err != nil || e.URL != "/app?a=2" || e.Status != 201 || e.ClientIP != "192.0.2.1" {
 		t.Fatalf("%+v, %v", e, err)
 	}
+}
+
+func FuzzAccessParsers(f *testing.F) {
+	f.Add("combined", "192.0.2.1 - - [25/Nov/2026:12:00:00 +0000] \"GET / HTTP/1.1\" 200 12 \"-\" \"browser\"")
+	f.Add("json", `{"ts":1795608000,"remote_addr":"192.0.2.1","status":200}`)
+	f.Add("envoy", `[2026-11-25T12:00:00.000Z] "GET / HTTP/2" 200 - 0 12 2 - "192.0.2.1" "browser" "id" "example.test" "127.0.0.1:8080"`)
+	f.Fuzz(func(t *testing.T, format, line string) {
+		e, err := ParseAccess(line, format)
+		if err == nil && format == "envoy" && e.ClientIP != "" {
+			t.Fatal("untrusted Envoy text was used as client identity")
+		}
+	})
 }
