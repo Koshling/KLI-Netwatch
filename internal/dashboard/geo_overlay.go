@@ -331,6 +331,9 @@ func pulseColor(category classifier.Category, theme Theme) string {
 		if light { return "\033[1;31;47m" }
 		return "\033[1;91m"
 	default:
+		if theme.UserPulse != "" {
+			return theme.UserPulse
+		}
 		if light { return "\033[1;34;47m" }
 		return "\033[1;93m"
 	}

@@ -101,7 +101,7 @@ func (s *Session) Menu(ctx context.Context, previous LaunchOptions, configuredLo
 			switch key {
 			case keyUp, keyDown, keyLeft, keyRight:
 				selected = moveModeSelection(selected, columns, key)
-			case '1', '2', '3', '4', '5':
+			case '1', '2', '3', '4', '5', '6', '7':
 				s.selectTheme(key)
 				view.clearScreen = true
 			case '\r', '\n':
@@ -177,7 +177,7 @@ func menuRows(width, height, columns, selected, frame int, note string, t Theme)
 	}
 
 	rows := make([]string, height)
-	rows[0] = fitANSI(t.Accent+"MENU", width)
+	rows[0] = fitANSI(t.heading()+"MENU", width)
 	rows[1] = fitANSI(t.Muted+strings.Repeat("═", width), width)
 	const gap = 2
 	groups := len(modeCards) / columns
@@ -204,7 +204,7 @@ func menuRows(width, height, columns, selected, frame int, note string, t Theme)
 		}
 		line := strings.Repeat("─", cardWidth-2)
 		rows[top] += space + border + "┌" + line + "┐"
-		rows[top+1] += space + border + "│" + fitANSI(marker+label, cardWidth-2) + "│"
+		rows[top+1] += space + border + "│" + fitANSI(t.Heading+marker+label, cardWidth-2) + border + "│"
 		for i, preview := range menuPreview(card.mode, art, cardWidth-2, cardHeight-3, frame, t) {
 			rows[top+2+i] += space + border + "│" + preview + border + "│"
 		}
@@ -217,7 +217,10 @@ func menuRows(width, height, columns, selected, frame int, note string, t Theme)
 
 func menuChoice(label string, selected bool, t Theme) string {
 	if selected {
-		return t.Accent + "> " + label
+		return t.heading() + "> " + label
+	}
+	if t.Heading != "" {
+		return t.Heading + "  " + label
 	}
 	return t.UI + "  " + label
 }
@@ -229,7 +232,7 @@ func menuListRows(width, height int, title string, items []string, selected int,
 		rows[0] = fitANSI(items[selected], width)
 		return rows
 	}
-	rows[0] = fitANSI(t.Accent+title, width)
+	rows[0] = fitANSI(t.heading()+title, width)
 	first, end := 1, height
 	if height >= 3 {
 		end--

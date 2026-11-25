@@ -210,7 +210,7 @@ func (s *Session) run(ctx context.Context, events <-chan event.AccessEvent, opti
 					endSince = time.Time{}
 					replay.target, replay.seeking = target, true
 				}
-			case '1', '2', '3', '4', '5':
+			case '1', '2', '3', '4', '5', '6', '7':
 				// Reapply the theme background to the live summary after a partial update.
 				d.themeIndex = s.selectTheme(key)
 				d.clearScreen = true
@@ -427,7 +427,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 	left := make([]string, l.ContentRows)
 	right := make([]string, l.ContentRows)
 
-	left[0] = t.Accent + "GLOBAL TRAFFIC" + "\033[0m"
+	left[0] = t.heading() + "GLOBAL TRAFFIC" + "\033[0m"
 
 	d.signalCap = signalLimit(l.GlobeWidth, l.GlobeHeight)
 	if len(d.signals) > d.signalCap {
@@ -480,7 +480,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 	if replay {
 		feedTitle = "REPLAY FEED"
 	}
-	put(t.Accent + feedTitle + "\033[0m")
+	put(t.heading() + feedTitle + "\033[0m")
 	put(t.Muted + fmt.Sprintf("%-8s %-7s %-6s %-3s %s",
 		"TIME", "TYPE", "METHOD", "CODE", "PATH") + "\033[0m")
 
@@ -526,7 +526,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 		))
 	}
 	put(t.Muted + strings.Repeat("─", l.RightWidth-2) + "\033[0m")
-	put(t.Accent + "REQUEST RATE / SEC" + "\033[0m")
+	put(t.heading() + "REQUEST RATE / SEC" + "\033[0m")
 
 	graph := d.rateGraph(l.GraphHeight, l.RightWidth-2, t)
 	for _, line := range graph {
@@ -556,8 +556,8 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 	}
 
 	put(fmt.Sprintf("%s%-*s%s │ %s%s",
-		t.Accent, leftPanel, "HTTP STATUS",
-		t.Muted, t.Accent, "CLIENTS BY TYPE"))
+		t.heading(), leftPanel, "HTTP STATUS",
+		t.Muted, t.heading(), "CLIENTS BY TYPE"))
 
 	if l.StatusRows == 2 {
 		httpStats := fmt.Sprintf("2:%s 3:%s 4:%s 5:%s O:%s",
@@ -601,7 +601,7 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 
 	summary := fmt.Sprintf(
 		"%sREQ %d   CLIENTS %d   USER %d   BOT %d   THREAT %d",
-		t.Accent, d.total, len(d.clients),
+		t.heading(), d.total, len(d.clients),
 		userClients, botClients, threatClients,
 	)
 	frame = append(frame, fitANSI(summary, l.Width))
@@ -614,14 +614,14 @@ func (d *Dashboard) frame(width, height int) ([]string, Layout) {
 	}
 
 	frame = append(frame, fitANSI(t.Muted+strings.Repeat("═", l.Width), l.Width))
-	controls := fitANSI(t.Accent+"[1] MONO  [2] MATRIX  [3] TERMINAL  [4] WESTERN  [5] REVERSE MONO", l.Width)
+	controls := fitANSI(t.Accent+"[1] MONO  [2] MATRIX  [3] TERMINAL  [4] WESTERN  [5] REVERSE MONO  [6] ICE  [7] AMBER", l.Width)
 	geoToggle := "[F] Overlay on"
 	if d.hideGeoOverlay {
 		geoToggle = "[F] Overlay off"
 	}
 	footer := fitANSI(t.UI+"[M] Menu  [Q] Exit  "+geoToggle, l.Width)
 	if replay {
-		controls = withRightLabel(t.Accent+d.replayStatus, "Themes 1-5", t.Accent, l.Width)
+		controls = withRightLabel(t.Accent+d.replayStatus, "Themes 1-7", t.Accent, l.Width)
 		globe := fmt.Sprintf("[M] Menu [Q] Exit %s [g/G] %dx [←/→] ±1m", geoToggle, d.replayGlobeSpeed)
 		footer = withRightLabel(t.UI+globe, "THEME: "+t.Name, t.Accent, l.Width)
 	}
@@ -738,7 +738,7 @@ func (d *Dashboard) rateGraph(height, width int, t Theme) []string {
 }
 
 func (d *Dashboard) startSignal(key geoKey, source string, category classifier.Category, seen time.Time) {
-	marker := geoMarker{Latitude: float64(key.latitude)/100, Longitude: float64(key.longitude)/100, Source: source, Category: category, Seen: seen}
+	marker := geoMarker{Latitude: float64(key.latitude) / 100, Longitude: float64(key.longitude) / 100, Source: source, Category: category, Seen: seen}
 	for i := range d.signals {
 		if d.signals[i].samePlace(marker) {
 			d.signals[i].Seen = seen
@@ -823,7 +823,7 @@ const globeStep = 0.035
 // first frames grazing the silhouette as the globe rotates away.
 func (m geoMarker) canLaunch(angle float64, rotationSpeed int) bool {
 	lat := m.Latitude * math.Pi / 180
-	lon := m.Longitude * math.Pi / 180 + angle
+	lon := m.Longitude*math.Pi/180 + angle
 	height := math.Sin(lat) * math.Sin(globeTilt)
 	radius := math.Cos(lat) * math.Cos(globeTilt)
 	for frame := 0; frame < 3; frame++ {
