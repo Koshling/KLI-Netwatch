@@ -9,19 +9,22 @@ import (
 // TrafficFilter decides which parsed requests reach the monitor in every mode.
 type TrafficFilter func(AccessEvent) bool
 
-func NewTrafficFilter(showMonitoring bool, bannedIPs []string) (TrafficFilter, error) {
-	banned := make(map[netip.Addr]struct{}, len(bannedIPs))
-	for _, value := range bannedIPs {
+func NewTrafficFilter(apply, showMonitoring bool, hiddenIPs []string) (TrafficFilter, error) {
+	if !apply {
+		return func(AccessEvent) bool { return true }, nil
+	}
+	hidden := make(map[netip.Addr]struct{}, len(hiddenIPs))
+	for _, value := range hiddenIPs {
 		ip, err := netip.ParseAddr(value)
 		if err != nil || ip.Zone() != "" {
-			return nil, fmt.Errorf("invalid IP address %q in banned_ips", value)
+			return nil, fmt.Errorf("invalid IP address %q in hidden_ips", value)
 		}
-		banned[ip.Unmap()] = struct{}{}
+		hidden[ip.Unmap()] = struct{}{}
 	}
 	return func(e AccessEvent) bool {
-		if len(banned) > 0 {
+		if len(hidden) > 0 {
 			if ip, err := netip.ParseAddr(e.ClientIP); err == nil {
-				if _, blocked := banned[ip.Unmap()]; blocked {
+				if _, blocked := hidden[ip.Unmap()]; blocked {
 					return false
 				}
 			}

@@ -57,12 +57,13 @@ Live, Replay and Interval hide successful `GET` and `HEAD` checks (HTTP 2xx) fro
 
 ```json
 {
-  "show_monitoring_traffic": true,
-  "banned_ips": ["192.0.2.42", "2001:db8::42"]
+  "apply_traffic_filters": true,
+  "show_monitoring_bot_traffic": true,
+  "hidden_ips": ["192.0.2.42", "2001:db8::42"]
 }
 ```
 
-Set `show_monitoring_traffic` to `true` to include these checks. `banned_ips` excludes all requests from the listed client addresses, including errors, regardless of the monitoring setting. The list accepts exact IPv4 and IPv6 addresses. The filter applies to the client's parsed IP and leaves the original log file intact.
+Traffic filtering defaults to on when `apply_traffic_filters` is omitted. Set it to `false` to show all traffic and bypass both filters. Set `show_monitoring_bot_traffic` to `true` to include these checks. `hidden_ips` excludes all requests from the listed client addresses, including errors, regardless of the monitoring setting. The list accepts exact IPv4 and IPv6 addresses. The filter applies to the client's parsed IP and leaves the original log file intact.
 
 ## GeoIP
 

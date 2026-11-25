@@ -14,8 +14,9 @@ func TestSetupConfigRoundTrip(t *testing.T) {
 		t.Run(format, func(t *testing.T) {
 			cfg := Default()
 			cfg.AccessFormat, cfg.GeoIPPrompt = format, true
+			cfg.ApplyTrafficFilters = format == "nginx"
 			cfg.ShowMonitoring = true
-			cfg.BannedIPs = []string{"192.0.2.42", "2001:db8::42"}
+			cfg.HiddenIPs = []string{"192.0.2.42", "2001:db8::42"}
 			cfg.MaxLineSize, cfg.PollInterval = 4096, 2*time.Second
 			cfg.ServerCoordinatesSet, cfg.ServerLongitude = true, 37.62
 			if format == "nginx" {
