@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	"netwatch/internal/config"
@@ -13,6 +11,7 @@ import (
 	"netwatch/internal/event"
 	"netwatch/internal/history"
 	"netwatch/internal/reader"
+	"netwatch/internal/regularfile"
 )
 
 func runMonitor(ctx context.Context, cfg config.Config, geo dashboard.GeoOptions, launch dashboard.LaunchOptions) error {
@@ -54,13 +53,16 @@ func runMonitor(ctx context.Context, cfg config.Config, geo dashboard.GeoOptions
 func runMode(ctx context.Context, session *dashboard.Session, cfg config.Config, parse event.AccessParser, keep event.TrafficFilter, geo dashboard.GeoOptions, launch dashboard.LaunchOptions) error {
 	if launch.Mode == dashboard.Live {
 		modeCtx, cancel := context.WithCancel(ctx)
-		events := make(chan event.AccessEvent, 512)
+		// Bound the queue by both record size and the number of events.
+		const queueBytes = 8 << 20
+		events := make(chan event.AccessEvent, min(512, queueBytes/max(1, cfg.MaxLineSize)))
+		var skipped atomic.Uint64
 		readerDone := make(chan error, 1)
 		go func() {
 			defer close(events)
-			readerDone <- followAccess(modeCtx, cfg, parse, keep, events)
+			readerDone <- followAccess(modeCtx, cfg, parse, keep, events, &skipped)
 		}()
-		err := session.RunLive(modeCtx, events, geo)
+		err := session.RunLive(modeCtx, events, geo, &skipped)
 		cancel()
 		if readerErr := <-readerDone; err == nil && !errors.Is(readerErr, context.Canceled) {
 			err = readerErr
@@ -76,29 +78,17 @@ func runMode(ctx context.Context, session *dashboard.Session, cfg config.Config,
 	if path == "" {
 		path = cfg.AccessLog
 	}
-	// A FIFO typed into the menu must not block before the regular-file check.
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	file, info, err := regularfile.Open(path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("cannot read regular replay log: %s", path)
-	}
 	scan := func(ctx context.Context, emit func(event.AccessEvent) error) (int, error) {
-		var previous time.Time
+		emit = history.InOrder(emit)
 		return history.ScanSnapshot(ctx, file, info.Size(), parse, cfg.MaxLineSize, start, end, func(e event.AccessEvent) error {
 			if !keep(e) {
 				return nil
 			}
-			if e.Time.Before(previous) {
-				return fmt.Errorf("timestamps out of order at %s", e.Time.Format(time.RFC3339Nano))
-			}
-			previous = e.Time
 			return emit(e)
 		})
 	}
@@ -108,17 +98,20 @@ func runMode(ctx context.Context, session *dashboard.Session, cfg config.Config,
 	return session.RunReplay(ctx, scan, geo, start, end)
 }
 
-func followAccess(ctx context.Context, cfg config.Config, parse event.AccessParser, keep event.TrafficFilter, events chan<- event.AccessEvent) error {
+func followAccess(ctx context.Context, cfg config.Config, parse event.AccessParser, keep event.TrafficFilter, events chan<- event.AccessEvent, skipped *atomic.Uint64) error {
 	r := reader.New(cfg.AccessLog, cfg.MaxLineSize, cfg.PollInterval)
+	r.OnOversizedLine = func() { skipped.Add(1) }
 	return r.Follow(ctx, true, func(line string) error {
 		ev, err := parse(line)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Access parse error: %v\n", err)
+			skipped.Add(1)
 			return nil
 		}
 		if !keep(ev) {
 			return nil
 		}
+		// These fields are unused after filtering and can retain decoded data.
+		ev.Referer, ev.XForwardedFor, ev.Protocol = "", "", ""
 		select {
 		case events <- ev:
 			return nil

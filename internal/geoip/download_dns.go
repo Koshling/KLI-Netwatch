@@ -1,7 +1,9 @@
 package geoip
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -15,6 +17,8 @@ import (
 
 func dbipTransport(fallbackUsed *atomic.Bool) *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxResponseHeaderBytes = 64 << 10
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	transport.DialContext = systemDNSFallback(transport.DialContext, systemDNSAddresses, fallbackUsed)
 	return transport
 }
@@ -74,13 +78,19 @@ func dialWithSystemDNS(
 }
 
 func systemDNSAddresses(ctx context.Context, host string) ([]netip.Addr, error) {
-	output, err := exec.CommandContext(ctx, "getent", "ahosts", host).Output()
-	if err != nil {
+	// Use the system NSS configuration when the Go resolver fails. The
+	// options delimiter keeps a configured host from becoming an argument.
+	cmd := exec.CommandContext(ctx, "getent", "--", "ahosts", host)
+	cmd.WaitDelay = time.Second
+	var output bytes.Buffer
+	remaining := int64(64 << 10)
+	cmd.Stdout = boundedWriter{&output, &remaining, "system DNS output"}
+	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 	var addresses []netip.Addr
 	// getent emits a separate row per socket type. Keep just the TCP rows.
-	for _, line := range strings.Split(string(output), "\n") {
+	for _, line := range strings.Split(output.String(), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 || fields[1] != "STREAM" {
 			continue

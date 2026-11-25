@@ -15,6 +15,8 @@ go vet ./...
 CGO_ENABLED=0 go build -o netwatch ./cmd/netwatch
 ```
 
+See the [release verification](docs/release-verification.md) for the load scenarios and reproduction commands.
+
 ## First launch
 
 Run `./netwatch` in a Linux terminal. If a configuration is missing, setup asks for your access log and optional GeoIP data. Press Enter to accept a suggested log path or type your own. NETWATCH chooses where to save the config automatically. NETWATCH looks for readable access logs in the usual Nginx, Apache, Caddy, Envoy and Traefik log directories and samples the log for a supported format. If it cannot identify a single format, setup asks you to choose and suggests the usual format for that source. The process needs read access to your access log.
@@ -49,7 +51,9 @@ Replay and interval can also be launched directly:
 ./netwatch -mode replay -from 2026-11-22T10:00:00+03:00 -to 2026-11-22T11:00:00+03:00
 ```
 
-These flags use historical access logs. The `geoip convert` subcommand works independently of monitor configuration.
+Replay and Interval require chronological timestamps in the selected, filtered log records. Equal timestamps are allowed. Use an immutable log copy for repeatable historical results. The `geoip convert` subcommand works independently of monitor configuration.
+
+Each session tracks the first 65,536 distinct client IPs. If more appear, a `+` marks the client count as a lower bound. Client category totals and distinct globe points reflect the tracked clients. Traffic, HTTP and historical mapped-request totals continue counting all included requests. Live summarizes malformed and oversized lines as `SKIPPED`. Monitor inputs must be regular files, and the JSON config is limited to 1 MiB.
 
 ## Traffic noise
 
@@ -79,7 +83,7 @@ You can also convert supported local CSV data to NWGEO with the same executable:
 ./netwatch geoip convert -input path/to/IPV4.csv -output data/ipv4.nwgeo -family 4
 ```
 
-Configure `geoip_ipv4_db` and/or `geoip_ipv6_db` in your local configuration to enable geographic lookups. Database files, logs and machine-specific config are intentionally excluded from this repository.
+Configure `geoip_ipv4_db` and/or `geoip_ipv6_db` in your local configuration to enable geographic lookups. NWGEO v1 files up to 2 GiB per family are searched on disk. Legacy CSV loading is limited to 16 MiB and 200,000 ranges across both families. Convert larger CSV files to NWGEO. A CSV record can occupy up to 256 KiB. DB-IP downloads accept same-origin HTTPS redirects and cap compressed input at 512 MiB, decompressed input at 2 GiB and temporary normalized CSV output at 2 GiB. Database files, logs and machine-specific config are intentionally excluded from this repository.
 
 ## License
 

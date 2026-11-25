@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -15,16 +14,20 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"netwatch/internal/regularfile"
 )
 
 // NWGEO v1: header (64 bytes), 64-byte sorted ranges, then variable-length locations.
 // All offsets are little-endian. The converter never retains the CSV rows in memory.
 const (
-	binaryHeaderSize  = 64
-	binaryRecordSize  = 64
-	binaryBlockRows   = 256
-	binaryVersion     = 1
-	maxGeoRecordBytes = 65535
+	binaryHeaderSize      = 64
+	binaryRecordSize      = 64
+	binaryBlockRows       = 256
+	binaryVersion         = 1
+	maxGeoRecordBytes     = 65535
+	maxBinaryBytes        = 2 << 30
+	maxConversionCSVBytes = 2 << 30
 )
 
 var binaryMagic = [8]byte{'N', 'W', 'G', 'E', 'O', '0', '0', '1'}
@@ -55,18 +58,14 @@ func ConvertCSVContext(ctx context.Context, source, destination string, family i
 	if family != 4 && family != 6 {
 		return fmt.Errorf("family must be 4 or 6")
 	}
-	srcInfo, err := os.Stat(source)
-	if err != nil {
-		return err
-	}
-	if !srcInfo.Mode().IsRegular() {
-		return errors.New("source is not a regular file")
-	}
-	src, err := os.Open(source)
+	src, srcInfo, err := regularfile.Open(source)
 	if err != nil {
 		return err
 	}
 	defer src.Close()
+	if srcInfo.Size() > maxConversionCSVBytes {
+		return fmt.Errorf("source CSV exceeds %d bytes", int64(maxConversionCSVBytes))
+	}
 	destDir := filepath.Dir(destination)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return err
@@ -94,9 +93,7 @@ func ConvertCSVContext(ctx context.Context, source, destination string, family i
 	}
 	wr := bufio.NewWriterSize(ranges, 64*1024)
 	mw := bufio.NewWriterSize(meta, 64*1024)
-	cr := csv.NewReader(bufio.NewReaderSize(src, 64*1024))
-	cr.FieldsPerRecord = -1
-	cr.ReuseRecord = true
+	cr := newBoundedCSV(contextReader{ctx, io.NewSectionReader(src, 0, srcInfo.Size())}, -1)
 	var count uint64
 	var metaSize uint64
 	var prevEnd [16]byte
@@ -154,8 +151,8 @@ func ConvertCSVContext(ctx context.Context, source, destination string, family i
 		if len(metadata) > maxGeoRecordBytes {
 			return fmt.Errorf("CSV row %d: location exceeds %d bytes", line, maxGeoRecordBytes)
 		}
-		if metaSize > math.MaxUint64-uint64(len(metadata)) {
-			return fmt.Errorf("metadata too large")
+		if binaryHeaderSize+(count+1)*binaryRecordSize+metaSize+uint64(len(metadata)) > maxBinaryBytes {
+			return fmt.Errorf("converted NWGEO exceeds %d bytes", int64(maxBinaryBytes))
 		}
 		var entry [binaryRecordSize]byte
 		copy(entry[0:16], start[:])
@@ -178,9 +175,6 @@ func ConvertCSVContext(ctx context.Context, source, destination string, family i
 	if count == 0 {
 		return errors.New("CSV contained no ranges")
 	}
-	if count > (math.MaxUint64-binaryHeaderSize)/binaryRecordSize {
-		return errors.New("too many ranges")
-	}
 	if err := wr.Flush(); err != nil {
 		return err
 	}
@@ -190,7 +184,10 @@ func ConvertCSVContext(ctx context.Context, source, destination string, family i
 	if _, err := meta.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	if _, err := io.Copy(ranges, meta); err != nil {
+	if srcInfo.Size() != cr.csv.InputOffset() {
+		return io.ErrUnexpectedEOF
+	}
+	if _, err := io.Copy(ranges, contextReader{ctx: ctx, source: meta}); err != nil {
 		return err
 	}
 	var header [binaryHeaderSize]byte
@@ -223,45 +220,71 @@ func ConvertCSVContext(ctx context.Context, source, destination string, family i
 
 // OpenBinary opens a verified NWGEO v1 database and builds a sparse, read-only RAM index.
 func OpenBinary(path string) (*BinaryResolver, error) {
-	f, err := os.Open(path)
+	f, info, err := regularfile.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	cleanup := func(e error) (*BinaryResolver, error) { f.Close(); return nil, e }
-	info, err := f.Stat()
+	r, err := openBinary(context.Background(), f, info.Size())
 	if err != nil {
-		return cleanup(err)
+		f.Close()
 	}
-	if !info.Mode().IsRegular() {
-		return cleanup(errors.New("database is not a regular file"))
+	return r, err
+}
+
+func openBinary(ctx context.Context, f *os.File, fileSize int64) (*BinaryResolver, error) {
+	if fileSize > maxBinaryBytes {
+		return nil, fmt.Errorf("NWGEO exceeds %d bytes", int64(maxBinaryBytes))
 	}
-	if info.Size() < binaryHeaderSize {
-		return cleanup(errors.New("truncated database header"))
+	if fileSize < binaryHeaderSize {
+		return nil, errors.New("truncated database header")
 	}
 	var h [binaryHeaderSize]byte
 	if _, err := f.ReadAt(h[:], 0); err != nil {
-		return cleanup(err)
+		return nil, err
 	}
 	if !bytes.Equal(h[:8], binaryMagic[:]) || h[8] != binaryVersion || (h[9] != 4 && h[9] != 6) {
-		return cleanup(errors.New("unsupported NWGEO database"))
+		return nil, errors.New("unsupported NWGEO database")
 	}
 	count := binary.LittleEndian.Uint64(h[16:24])
 	start := binary.LittleEndian.Uint64(h[24:32])
 	size := binary.LittleEndian.Uint64(h[32:40])
-	if count == 0 || count > (math.MaxUint64-binaryHeaderSize)/binaryRecordSize || start != binaryHeaderSize+count*binaryRecordSize || size > math.MaxUint64-start || start+size != uint64(info.Size()) {
-		return cleanup(errors.New("invalid NWGEO file size or header"))
+	if count == 0 || count > (math.MaxUint64-binaryHeaderSize)/binaryRecordSize || start != binaryHeaderSize+count*binaryRecordSize || size > math.MaxUint64-start || start+size != uint64(fileSize) {
+		return nil, errors.New("invalid NWGEO file size or header")
 	}
 	r := &BinaryResolver{file: f, family: h[9], count: count, metadataStart: start, metadataSize: size}
-	for row := uint64(0); row < count; row += binaryBlockRows {
-		var entry [binaryRecordSize]byte
-		if _, err := f.ReadAt(entry[:], int64(binaryHeaderSize+row*binaryRecordSize)); err != nil {
-			return cleanup(err)
+	r.blocks = make([]blockEntry, 0, (count+binaryBlockRows-1)/binaryBlockRows)
+	records := bufio.NewReaderSize(contextReader{ctx, io.NewSectionReader(f, binaryHeaderSize, int64(start)-binaryHeaderSize)}, 64<<10)
+	var previousEnd [16]byte
+	var record [binaryRecordSize]byte
+	var ipv4Prefix [12]byte
+	for row := uint64(0); row < count; row++ {
+		if _, err := io.ReadFull(records, record[:]); err != nil {
+			return nil, err
 		}
-		var first [16]byte
-		copy(first[:], entry[:16])
-		r.blocks = append(r.blocks, blockEntry{first, row})
+		first, last := record[:16], record[16:32]
+		if bytes.Compare(first, last) > 0 || row > 0 && bytes.Compare(first, previousEnd[:]) <= 0 ||
+			r.family == 4 && (!bytes.Equal(first[:12], ipv4Prefix[:]) || !bytes.Equal(last[:12], ipv4Prefix[:])) {
+			return nil, fmt.Errorf("invalid NWGEO range at record %d", row+1)
+		}
+		lat := math.Float64frombits(binary.LittleEndian.Uint64(record[32:40]))
+		lon := math.Float64frombits(binary.LittleEndian.Uint64(record[40:48]))
+		if _, _, ok := r.recordMetadata(record[:]); !ok || !validCoordinates(lat, lon) {
+			return nil, fmt.Errorf("invalid NWGEO location at record %d", row+1)
+		}
+		copy(previousEnd[:], last)
+		if row%binaryBlockRows == 0 {
+			r.blocks = append(r.blocks, blockEntry{[16]byte(first), row})
+		}
 	}
 	return r, nil
+}
+
+func (r *BinaryResolver) recordMetadata(record []byte) (offset uint64, length uint32, valid bool) {
+	offset = binary.LittleEndian.Uint64(record[48:56])
+	length = binary.LittleEndian.Uint32(record[56:60])
+	valid = offset <= r.metadataSize && uint64(length) <= r.metadataSize-offset &&
+		length >= 8 && length <= maxGeoRecordBytes
+	return
 }
 
 func (r *BinaryResolver) Close() error {
@@ -282,10 +305,14 @@ func (r *BinaryResolver) Lookup(rawIP string) Location {
 		return Location{}
 	}
 	addr = addr.Unmap()
-	if !isPublicCandidate(addr) {
+	if addr.Zone() != "" || !isPublicCandidate(addr) {
 		return Location{}
 	}
 	key, v6 := addressKey(addr)
+	return r.lookupAddress(key, v6)
+}
+
+func (r *BinaryResolver) lookupAddress(key [16]byte, v6 bool) Location {
 	if v6 != (r.family == 6) {
 		return Location{}
 	}
@@ -332,19 +359,22 @@ func (r *BinaryResolver) Lookup(rawIP string) Location {
 	if !validCoordinates(lat, lon) {
 		return Location{}
 	}
-	offset := binary.LittleEndian.Uint64(rec[48:56])
-	length := binary.LittleEndian.Uint32(rec[56:60])
-	size := uint64(length)
-	if offset > r.metadataSize || size > r.metadataSize-offset || length < 8 || length > maxGeoRecordBytes {
+	offset, length, ok := r.recordMetadata(rec)
+	if !ok {
 		return Location{}
 	}
-	payload := make([]byte, length)
+	var small [256]byte
+	payload := small[:]
+	if int(length) > len(small) {
+		payload = make([]byte, length)
+	}
+	payload = payload[:length]
 	if _, err := r.file.ReadAt(payload, int64(r.metadataStart+offset)); err != nil {
 		return Location{}
 	}
-	fields := [4]string{}
-	pos := 0
-	for i := range fields {
+	var spans [4][2]int
+	pos, textBytes := 0, 0
+	for i := range spans {
 		if pos+2 > len(payload) {
 			return Location{}
 		}
@@ -353,11 +383,16 @@ func (r *BinaryResolver) Lookup(rawIP string) Location {
 		if n > len(payload)-pos {
 			return Location{}
 		}
-		fields[i] = string(payload[pos : pos+n])
+		// Move the validated text over the already consumed length prefixes.
+		copy(payload[textBytes:], payload[pos:pos+n])
+		spans[i] = [2]int{textBytes, textBytes + n}
+		textBytes += n
 		pos += n
 	}
 	if pos != len(payload) {
 		return Location{}
 	}
-	return Location{CountryCode: fields[0], Country: fields[1], Region: fields[2], City: fields[3], Latitude: lat, Longitude: lon, Found: true}
+	text := string(payload[:textBytes])
+	field := func(i int) string { return text[spans[i][0]:spans[i][1]] }
+	return Location{CountryCode: field(0), Country: field(1), Region: field(2), City: field(3), Latitude: lat, Longitude: lon, Found: true}
 }

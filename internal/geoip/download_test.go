@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -107,5 +110,34 @@ func TestDownloadDBIPRemovesPartialInstallation(t *testing.T) {
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("partial installation was left behind: %v, %v", entries, err)
+	}
+}
+
+func TestDBIPTransportVerifiesTLSCertificates(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	var fallback atomic.Bool
+	transport := dbipTransport(&fallback)
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: time.Second}
+	resp, err := client.Get(server.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("accepted a certificate outside the root trust store")
+	}
+	trusted := transport.Clone()
+	defer trusted.CloseIdleConnections()
+	trusted.TLSClientConfig.RootCAs = x509.NewCertPool()
+	trusted.TLSClientConfig.RootCAs.AddCert(server.Certificate())
+	client.Transport = trusted
+	resp, err = client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || resp.TLS.Version < tls.VersionTLS12 {
+		t.Fatalf("unexpected status (%d) or TLS version (%x)", resp.StatusCode, resp.TLS.Version)
 	}
 }

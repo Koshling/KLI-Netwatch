@@ -2,11 +2,12 @@ package config
 
 import (
 	"math"
-	"netwatch/internal/event"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"netwatch/internal/event"
 )
 
 func loadTestJSON(t *testing.T, body string) (Config, error) {
@@ -115,5 +116,17 @@ func TestTrafficFilterConfig(t *testing.T) {
 	}
 	if _, err := loadTestJSON(t, `{"hidden_ips":["invalid"]}`); err == nil || !strings.Contains(err.Error(), "hidden_ips") {
 		t.Fatalf("expected invalid hidden IP error, got %v", err)
+	}
+}
+
+func TestRejectOversizedAndNullConfig(t *testing.T) {
+	for _, body := range []string{"null", "{}" + strings.Repeat(" ", maxConfigBytes)} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatal("accepted an invalid config")
+		}
 	}
 }

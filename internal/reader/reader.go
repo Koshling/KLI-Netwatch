@@ -8,12 +8,15 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"netwatch/internal/regularfile"
 )
 
 type Reader struct {
-	Path         string
-	MaxLineSize  int
-	PollInterval time.Duration
+	Path            string
+	MaxLineSize     int
+	PollInterval    time.Duration
+	OnOversizedLine func()
 }
 
 func New(path string, maxLineSize int, pollInterval time.Duration) *Reader {
@@ -108,6 +111,9 @@ func (r *Reader) Follow(
 				if len(pending) > maxSize || (len(pending) == maxSize && b != '\r') {
 					pending = pending[:0]
 					dropping = true
+					if r.OnOversizedLine != nil {
+						r.OnOversizedLine()
+					}
 					continue
 				}
 
@@ -135,19 +141,13 @@ func (r *Reader) Follow(
 		}
 
 		if file == nil {
-			opened, err := os.Open(r.Path)
+			opened, info, err := regularfile.Open(r.Path)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					// A log created after this poll contains only new data.
 					initialized = true
 					continue
 				}
-				return err
-			}
-
-			info, err := opened.Stat()
-			if err != nil {
-				_ = opened.Close()
 				return err
 			}
 
@@ -177,7 +177,17 @@ func (r *Reader) Follow(
 
 		pathInfo, err := os.Stat(r.Path)
 		if err == nil && !os.SameFile(identity, pathInfo) {
-			if err := readAvailable(file); err != nil {
+			// A writer may still hold the old descriptor. Drain only the bytes
+			// present when rotation is detected before switching to the new log.
+			old, err := file.Stat()
+			if err != nil {
+				return err
+			}
+			offset, err := file.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return err
+			}
+			if err := readAvailable(io.LimitReader(file, old.Size()-offset)); err != nil {
 				return err
 			}
 			if err := closeFile(true); err != nil {
@@ -186,38 +196,40 @@ func (r *Reader) Follow(
 			continue
 		}
 
-		var available io.Reader = file
-		if err == nil {
-			offset, seekErr := file.Seek(0, io.SeekCurrent)
-			if seekErr != nil {
-				return seekErr
+		if err != nil {
+			// Continue following the open inode while a replacement is absent.
+			pathInfo, err = file.Stat()
+			if err != nil {
+				return err
 			}
-
-			rewritten := pathInfo.Size() < offset
-			if !rewritten && len(suffix) > 0 {
-				var probe [suffixSize]byte
-				n, err := file.ReadAt(probe[:len(suffix)], offset-int64(len(suffix)))
-				if err != nil && err != io.EOF {
-					return err
-				}
-				rewritten = !bytes.Equal(suffix, probe[:n])
-			}
-			if rewritten {
-				suffix = suffix[:0]
-				if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
-					return seekErr
-				}
-				pending = nil
-				dropping = false
-				offset = 0
-			}
-			if pathInfo.Size() == offset {
-				continue
-			}
-			available = io.LimitReader(file, pathInfo.Size()-offset)
+		}
+		offset, seekErr := file.Seek(0, io.SeekCurrent)
+		if seekErr != nil {
+			return seekErr
 		}
 
-		if err := readAvailable(available); err != nil {
+		rewritten := pathInfo.Size() < offset
+		if !rewritten && len(suffix) > 0 {
+			var probe [suffixSize]byte
+			n, err := file.ReadAt(probe[:len(suffix)], offset-int64(len(suffix)))
+			if err != nil && err != io.EOF {
+				return err
+			}
+			rewritten = !bytes.Equal(suffix, probe[:n])
+		}
+		if rewritten {
+			suffix = suffix[:0]
+			if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
+				return seekErr
+			}
+			pending = nil
+			dropping = false
+			offset = 0
+		}
+		if pathInfo.Size() == offset {
+			continue
+		}
+		if err := readAvailable(io.LimitReader(file, pathInfo.Size()-offset)); err != nil {
 			return err
 		}
 	}

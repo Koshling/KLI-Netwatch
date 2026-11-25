@@ -17,6 +17,7 @@ import (
 	"netwatch/internal/config"
 	"netwatch/internal/event"
 	"netwatch/internal/geoip"
+	"netwatch/internal/regularfile"
 )
 
 type setupPrompts struct {
@@ -25,7 +26,7 @@ type setupPrompts struct {
 }
 
 func (p setupPrompts) ask(label, fallback string) (string, error) {
-	fmt.Fprintf(p.out, "%s [%s]: ", label, fallback)
+	fmt.Fprintf(p.out, "%s [%s]: ", label, cleanDiagnostic(fallback))
 	if !p.lines.Scan() {
 		if err := p.lines.Err(); err != nil {
 			return "", err
@@ -65,7 +66,7 @@ func runAutoConfig(explicitPath string, out io.Writer) error {
 		if _, err := config.Load(path); err != nil {
 			return err
 		}
-		fmt.Fprintln(out, "Configuration already exists:", path)
+		fmt.Fprintln(out, "Configuration already exists:", cleanDiagnostic(path))
 		return nil
 	}
 
@@ -98,7 +99,7 @@ func runAutoConfig(explicitPath string, out io.Writer) error {
 	if err := config.CreateSetup(path, cfg); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "Saved configuration:", path)
+	fmt.Fprintln(out, "Saved configuration:", cleanDiagnostic(path))
 	return nil
 }
 
@@ -126,7 +127,7 @@ func runSetup(explicitPath string, setupOnly, interactive bool, in io.Reader, ou
 	if err := config.CreateSetup(path, cfg); err != nil {
 		return config.Config{}, err
 	}
-	fmt.Fprintln(out, "Saved configuration:", path)
+	fmt.Fprintln(out, "Saved configuration:", cleanDiagnostic(path))
 	return cfg, nil
 }
 
@@ -146,7 +147,7 @@ func (p setupPrompts) loadExisting(path string, setupOnly, interactive bool) (co
 			return config.Load(path)
 		}
 	} else if setupOnly {
-		fmt.Fprintln(p.out, "Configuration already exists:", path)
+		fmt.Fprintln(p.out, "Configuration already exists:", cleanDiagnostic(path))
 	}
 	return cfg, nil
 }
@@ -163,14 +164,8 @@ func absolutePath(path string) (string, error) {
 }
 
 func openRegular(path string) (*os.File, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file", path)
-	}
-	return os.Open(path)
+	file, _, err := regularfile.Open(path)
+	return file, err
 }
 
 type accessLogCandidate struct {
@@ -252,7 +247,9 @@ func (p setupPrompts) chooseAccessLog(candidates []accessLogCandidate, fallback 
 		return paths[0], nil
 	}
 	if len(paths) > 1 {
-		fmt.Fprintln(p.out, strings.Join(paths, "\n"))
+		for _, path := range paths {
+			fmt.Fprintln(p.out, cleanDiagnostic(path))
+		}
 		return p.ask("Access log path", paths[0])
 	}
 	return answer, nil
@@ -271,7 +268,7 @@ func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
 		}
 		f, err := openRegular(path)
 		if err != nil {
-			fmt.Fprintln(p.out, err)
+			fmt.Fprintln(p.out, cleanDiagnostic(err.Error()))
 			fmt.Fprintln(p.out, "Enter a readable access log path or press Ctrl+C to exit setup.")
 			continue
 		}
@@ -305,7 +302,7 @@ func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
 				}
 			}
 			if err := cfg.Validate(); err != nil {
-				fmt.Fprintln(p.out, err)
+				fmt.Fprintln(p.out, cleanDiagnostic(err.Error()))
 				continue
 			}
 			return nil
@@ -354,7 +351,7 @@ func (p setupPrompts) configureGeoIP(configPath string, cfg *config.Config) erro
 	label := "Download DB-IP Lite for GeoIP? (y/n/never/path)"
 	fallback := "Y"
 	if v4 != "" || v6 != "" {
-		fmt.Fprintf(p.out, "Found GeoIP databases (IPv4: %s, IPv6: %s)\n", v4, v6)
+		fmt.Fprintf(p.out, "Found GeoIP databases (IPv4: %s, IPv6: %s)\n", cleanDiagnostic(v4), cleanDiagnostic(v6))
 		label = "GeoIP (auto = use detected files, y = download DB-IP Lite, n = skip, never, path)"
 		fallback = "auto"
 	}
@@ -466,7 +463,7 @@ func (p setupPrompts) enterGeoPaths(cfg *config.Config, v4, v6 string) error {
 			}
 			path, err := checkedGeoPath(text, field.family)
 			if err != nil {
-				fmt.Fprintln(p.out, err)
+				fmt.Fprintln(p.out, cleanDiagnostic(err.Error()))
 				continue
 			}
 			*field.path = path
@@ -501,14 +498,14 @@ func (p setupPrompts) downloadGeoIP(cfg *config.Config, dataDir string) error {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
-			fmt.Fprintf(p.out, "GeoIP download failed: %v\nContinuing without GeoIP. NETWATCH will ask again on the next interactive start.\n", err)
+			fmt.Fprintf(p.out, "GeoIP download failed: %s\nContinuing without GeoIP. NETWATCH will ask again on the next interactive start.\n", cleanDiagnostic(err.Error()))
 			cfg.GeoIPPrompt = true
 			return nil
 		}
 		cfg.GeoIPIPv4DB = filepath.Join(dir, "ipv4.nwgeo")
 		cfg.GeoIPIPv6DB = filepath.Join(dir, "ipv6.nwgeo")
 		cfg.GeoIPSource, cfg.GeoIPPrompt = "db-ip", false
-		fmt.Fprintln(p.out, "Installed GeoIP databases:", dir)
+		fmt.Fprintln(p.out, "Installed GeoIP databases:", cleanDiagnostic(dir))
 		return nil
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"netwatch/internal/event"
+	"netwatch/internal/regularfile"
 )
 
 // Scan reads complete lines within the size observed at entry.
@@ -17,18 +18,11 @@ func Scan(ctx context.Context, path, format string, limit int, from, until time.
 	if limit < 1 || !from.Before(until) {
 		return 0, fmt.Errorf("invalid line limit or interval")
 	}
-	f, err := os.Open(path)
+	f, info, err := regularfile.Open(path)
 	if err != nil {
 		return 0, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
-	if !info.Mode().IsRegular() {
-		return 0, fmt.Errorf("expected regular log file")
-	}
 	parse, err := event.NewAccessParser(format, "", "", nil)
 	if err != nil {
 		return 0, err
@@ -89,5 +83,17 @@ func ScanSnapshot(ctx context.Context, f *os.File, size int64, parse event.Acces
 		}
 		line = line[:0]
 		oversized = false
+	}
+}
+
+// InOrder checks timestamps of the events accepted for one historical pass.
+func InOrder(emit func(event.AccessEvent) error) func(event.AccessEvent) error {
+	var previous time.Time
+	return func(e event.AccessEvent) error {
+		if e.Time.Before(previous) {
+			return fmt.Errorf("timestamps out of order at %s", e.Time.Format(time.RFC3339Nano))
+		}
+		previous = e.Time
+		return emit(e)
 	}
 }

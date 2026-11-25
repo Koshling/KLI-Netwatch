@@ -31,7 +31,7 @@ type replayClock struct {
 
 func (s *Session) RunReplay(ctx context.Context, scan func(context.Context, func(event.AccessEvent) error) (int, error), options GeoOptions, start, end time.Time) error {
 	clock := &replayClock{start: start, anchor: start, end: end, wall: time.Now(), scan: scan}
-	return s.run(ctx, nil, options, clock)
+	return s.run(ctx, nil, options, clock, nil)
 }
 
 type scanResult struct {

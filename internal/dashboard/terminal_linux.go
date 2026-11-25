@@ -5,8 +5,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
-	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -33,7 +31,7 @@ func terminalSize() (int, int) {
 		return 120, 30
 	}
 
-	return int(ws.Cols), int(ws.Rows)
+	return min(500, int(ws.Cols)), min(200, int(ws.Rows))
 }
 
 const (
@@ -45,14 +43,9 @@ const (
 )
 
 func keyboardInput() (<-chan rune, func()) {
-	info, err := os.Stdin.Stat()
-	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
-		return nil, func() {}
-	}
-	getState := exec.Command("stty", "-g")
-	getState.Stdin = os.Stdin
-	state, err := getState.Output()
-	if err != nil {
+	var state syscall.Termios
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, os.Stdin.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&state)))
+	if errno != 0 {
 		return nil, func() {}
 	}
 
@@ -62,9 +55,10 @@ func keyboardInput() (<-chan rune, func()) {
 	if err != nil {
 		return nil, func() {}
 	}
-	setMode := exec.Command("stty", "-echo", "-icanon", "min", "1", "time", "0")
-	setMode.Stdin, setMode.Stdout, setMode.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := setMode.Run(); err != nil {
+	mode := state
+	mode.Lflag &^= syscall.ECHO | syscall.ICANON
+	mode.Cc[syscall.VMIN], mode.Cc[syscall.VTIME] = 1, 0
+	if err := setTerminalMode(os.Stdin, &mode); err != nil {
 		input.Close()
 		return nil, func() {}
 	}
@@ -94,10 +88,16 @@ func keyboardInput() (<-chan rune, func()) {
 		close(done)
 		input.Close()
 		<-finished
-		restore := exec.Command("stty", strings.TrimSpace(string(state)))
-		restore.Stdin, restore.Stdout, restore.Stderr = os.Stdin, os.Stdout, os.Stderr
-		_ = restore.Run()
+		_ = setTerminalMode(os.Stdin, &state)
 	}
+}
+
+func setTerminalMode(file *os.File, mode *syscall.Termios) error {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), syscall.TCSETS, uintptr(unsafe.Pointer(mode)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 func readKey(reader *bufio.Reader, input *os.File) (rune, error) {

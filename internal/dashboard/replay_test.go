@@ -8,12 +8,12 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
-	"netwatch/internal/classifier"
 	"netwatch/internal/event"
 	"netwatch/internal/geoip"
-	"time"
+	"netwatch/internal/history"
 )
 
 func TestReplayClockPauseAndSpeed(t *testing.T) {
@@ -60,13 +60,7 @@ func TestReplayEventUpdatesGlobe(t *testing.T) {
 	}
 	defer resolver.Close()
 
-	d := Dashboard{
-		clients:    make(map[string]classifier.Category),
-		classifier: classifier.New(),
-		geoOptions: GeoOptions{Resolver: resolver},
-		geoSeen:    make(map[string]*geoKey),
-		geoMarkers: make(map[geoKey]int),
-	}
+	d := newDashboard(GeoOptions{Resolver: resolver})
 	start := time.Unix(100, 0)
 	d.updateRate(start)
 	d.add(event.AccessEvent{Time: start, ClientIP: "8.8.8.8", Status: 200})
@@ -76,18 +70,14 @@ func TestReplayEventUpdatesGlobe(t *testing.T) {
 	summary.intervalOnly = true
 	summary.overview = newOverview(start, start.Add(time.Minute))
 	summary.add(event.AccessEvent{Time: start, ClientIP: "8.8.8.8", Status: 200})
-	if summary.overview.located != 1 || len(summary.pending) != 0 || len(summary.geoSeen) != 0 {
+	if summary.overview.located != 1 || len(summary.pending) != 0 || len(summary.geoMarkers) != 0 {
 		t.Fatal("interval scan must aggregate mapped traffic without tracking globe sources")
 	}
 	const want = 1
 	if len(d.geoMarkers) != want {
 		t.Fatalf("replay globe marker count = %d, want %d", len(d.geoMarkers), want)
 	}
-	for _, count := range d.geoMarkers {
-		if count != want {
-			t.Fatalf("unique IPs at marker = %d, want %d", count, want)
-		}
-	}
+
 }
 
 func TestSeekMatchesChronologicalPass(t *testing.T) {
@@ -108,11 +98,32 @@ func TestSeekMatchesChronologicalPass(t *testing.T) {
 	want.updateRate(target)
 	rebuilt := newDashboard(GeoOptions{})
 	rebuilt.updateRate(start)
-	c := replayClock{start: start, end: start.Add(time.Hour), target: target, seeking: true, paused: true}
-	for i := range rows {
-		if consumed := rebuilt.catchUp(&c, &rows[i], start); consumed != (i < 3) {
+	c := replayClock{start: start, end: start.Add(time.Hour), seeking: false, paused: true,
+		scan: func(ctx context.Context, emit func(event.AccessEvent) error) (int, error) {
+			emit = history.InOrder(emit)
+			for _, row := range rows {
+				if err := emit(row); err != nil {
+					return 0, err
+				}
+			}
+			return 0, nil
+		}}
+	played := c.openStream(t.Context())
+	for range played.events {
+	}
+	played.close()
+	if played.result.err != nil {
+		t.Fatal(played.result.err)
+	}
+	c.target, c.seeking = c.seekTarget(target.Add(time.Minute), -time.Minute), true
+	restarted := c.openStream(t.Context())
+	defer restarted.close()
+	i := 0
+	for row := range restarted.events {
+		if consumed := rebuilt.catchUp(&c, &row, start); consumed != (i < 3) {
 			t.Fatalf("unexpected consumption at row %d", i)
 		}
+		i++
 	}
 	if c.seeking || !c.paused || !c.anchor.Equal(target) || !reflect.DeepEqual(want, rebuilt) {
 		t.Fatal("seek state differs from linear playback")

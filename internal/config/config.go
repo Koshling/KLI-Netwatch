@@ -3,11 +3,12 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
-	"os"
 	"time"
 
 	"netwatch/internal/event"
+	"netwatch/internal/regularfile"
 )
 
 type Config struct {
@@ -62,17 +63,42 @@ func Default() Config {
 	}
 }
 
+const maxConfigBytes = 1 << 20
+
+func readConfig(path string) ([]byte, error) {
+	file, info, err := regularfile.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if info.Size() > maxConfigBytes {
+		return nil, fmt.Errorf("config exceeds %d bytes", maxConfigBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxConfigBytes {
+		return nil, fmt.Errorf("config exceeds %d bytes", maxConfigBytes)
+	}
+	return data, nil
+}
+
 func Load(path string) (Config, error) {
 	cfg := Default()
 
-	data, err := os.ReadFile(path)
+	data, err := readConfig(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
 
-	var file configFile
+	var file *configFile
 	if err := json.Unmarshal(data, &file); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
+	}
+
+	if file == nil {
+		return Config{}, fmt.Errorf("config must be a JSON object")
 	}
 
 	if file.AccessLog != "" {

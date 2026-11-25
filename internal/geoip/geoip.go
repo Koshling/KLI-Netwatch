@@ -2,20 +2,26 @@ package geoip
 
 import (
 	"bytes"
-	"encoding/csv"
+	"context"
 	"fmt"
 	"io"
 	"math/big"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+
+	"netwatch/internal/regularfile"
 )
 
-const maxCacheEntries = 65536
+const (
+	maxCacheEntries   = 16384
+	maxCacheTextBytes = 4 << 20
+	maxLegacyCSVBytes = 16 << 20
+	maxLegacyCSVRows  = 200000
+)
 
 type Location struct {
 	CountryCode string
@@ -40,22 +46,31 @@ type Resolver struct {
 	binaryV4  *BinaryResolver
 	binaryV6  *BinaryResolver
 
-	cacheMu sync.RWMutex
-	cache   map[netip.Addr]Location
+	cacheMu          sync.RWMutex
+	cache            map[netip.Addr]Location
+	cacheTextBytes   int
+	cacheOrder       []netip.Addr
+	cacheHead        int
+	legacyInputBytes int64
 }
 
 // Open accepts legacy CSV or NWGEO v1 files independently for each address family.
 // NWGEO files are searched on disk; CSV files retain the existing in-memory behavior.
 func Open(ipv4Path, ipv6Path string) (*Resolver, error) {
+	return OpenContext(context.Background(), ipv4Path, ipv6Path)
+}
+
+// OpenContext also observes cancellation while scanning each database.
+func OpenContext(ctx context.Context, ipv4Path, ipv6Path string) (*Resolver, error) {
 	r := &Resolver{cache: make(map[netip.Addr]Location)}
 	if ipv4Path != "" {
-		if err := r.loadDatabase(ipv4Path, false); err != nil {
+		if err := r.loadDatabase(ctx, ipv4Path, false); err != nil {
 			_ = r.Close()
 			return nil, fmt.Errorf("load IPv4 GeoIP database: %w", err)
 		}
 	}
 	if ipv6Path != "" {
-		if err := r.loadDatabase(ipv6Path, true); err != nil {
+		if err := r.loadDatabase(ctx, ipv6Path, true); err != nil {
 			_ = r.Close()
 			return nil, fmt.Errorf("load IPv6 GeoIP database: %w", err)
 		}
@@ -89,25 +104,23 @@ func (r *Resolver) Close() error {
 	return first
 }
 
-func (r *Resolver) loadDatabase(path string, ipv6 bool) error {
-	f, err := os.Open(path)
+func (r *Resolver) loadDatabase(ctx context.Context, path string, ipv6 bool) error {
+	f, info, err := regularfile.Open(path)
 	if err != nil {
 		return err
 	}
 	var magic [8]byte
-	n, readErr := f.Read(magic[:])
-	closeErr := f.Close()
+	n, readErr := f.ReadAt(magic[:], 0)
 	if readErr != nil && readErr != io.EOF {
+		f.Close()
 		return readErr
-	}
-	if closeErr != nil {
-		return closeErr
 	}
 	// Explicit .nwgeo paths are always parsed as binary, including if corrupt.
 	// Magic also permits binary files without the canonical extension.
 	if filepath.Ext(path) == ".nwgeo" || n == len(magic) && magic == binaryMagic {
-		br, err := OpenBinary(path)
+		br, err := openBinary(ctx, f, info.Size())
 		if err != nil {
+			f.Close()
 			return err
 		}
 		family := byte(4)
@@ -125,19 +138,16 @@ func (r *Resolver) loadDatabase(path string, ipv6 bool) error {
 		}
 		return nil
 	}
-	return r.loadFile(path, ipv6)
+	defer f.Close()
+	if info.Size() > maxLegacyCSVBytes-r.legacyInputBytes {
+		return fmt.Errorf("legacy GeoIP CSV exceeds %d total bytes; convert to NWGEO", maxLegacyCSVBytes)
+	}
+	r.legacyInputBytes += info.Size()
+	return r.loadCSV(contextReader{ctx, io.NewSectionReader(f, 0, info.Size())}, info.Size(), ipv6)
 }
 
-func (r *Resolver) loadFile(path string, ipv6 bool) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	reader := csv.NewReader(f)
-	reader.FieldsPerRecord = -1
-	reader.ReuseRecord = true
+func (r *Resolver) loadCSV(src io.Reader, size int64, ipv6 bool) error {
+	reader := newBoundedCSV(src, -1)
 
 	var previousEnd [16]byte
 	havePrevious := false
@@ -197,6 +207,9 @@ func (r *Resolver) loadFile(path string, ipv6 bool) error {
 			Found:       true,
 		}
 
+		if len(r.locations) >= maxLegacyCSVRows {
+			return fmt.Errorf("legacy GeoIP CSV exceeds %d total ranges; convert to NWGEO", maxLegacyCSVRows)
+		}
 		index := uint32(len(r.locations))
 		r.locations = append(r.locations, loc)
 
@@ -211,6 +224,9 @@ func (r *Resolver) loadFile(path string, ipv6 bool) error {
 		havePrevious = true
 	}
 
+	if reader.csv.InputOffset() != size {
+		return io.ErrUnexpectedEOF
+	}
 	return nil
 }
 
@@ -227,7 +243,24 @@ func validCoordinates(lat, lon float64) bool {
 func decimalIP(value string, ipv6 bool) ([16]byte, error) {
 	var result [16]byte
 
-	n, ok := new(big.Int).SetString(value, 10)
+	// Drop leading zeroes before bounding big.Int work, retaining the
+	// historical acceptance of zero-padded decimal addresses.
+	digits, positive := strings.CutPrefix(value, "+")
+	if positive && (digits == "" || digits[0] < '0' || digits[0] > '9') {
+		return result, fmt.Errorf("not an unsigned decimal integer")
+	}
+	if strings.HasPrefix(digits, "0") {
+		digits = strings.TrimLeft(digits, "0")
+		if digits == "" {
+			digits = "0"
+		} else if digits[0] < '0' || digits[0] > '9' {
+			return result, fmt.Errorf("not an unsigned decimal integer")
+		}
+	}
+	if len(digits) > 39 {
+		return result, fmt.Errorf("decimal address exceeds 39 digits")
+	}
+	n, ok := new(big.Int).SetString(digits, 10)
 	if !ok || n.Sign() < 0 {
 		return result, fmt.Errorf("not an unsigned decimal integer")
 	}
@@ -254,9 +287,13 @@ func (r *Resolver) Lookup(rawIP string) Location {
 	if err != nil {
 		return Location{}
 	}
-	addr = addr.Unmap()
+	return r.LookupAddr(addr)
+}
 
-	if !isPublicCandidate(addr) {
+// LookupAddr uses an already parsed address from the monitor.
+func (r *Resolver) LookupAddr(addr netip.Addr) Location {
+	addr = addr.Unmap()
+	if addr.Zone() != "" || !isPublicCandidate(addr) {
 		return Location{}
 	}
 
@@ -276,13 +313,8 @@ func (r *Resolver) Lookup(rawIP string) Location {
 		disk = r.binaryV4
 	}
 	if disk != nil {
-		loc = disk.Lookup(addr.String())
-		r.cacheMu.Lock()
-		if len(r.cache) >= maxCacheEntries {
-			clear(r.cache)
-		}
-		r.cache[addr] = loc
-		r.cacheMu.Unlock()
+		loc = disk.lookupAddress(key, isV6)
+		r.cacheLocation(addr, loc)
 		return loc
 	}
 	ranges := r.v4
@@ -299,14 +331,42 @@ func (r *Resolver) Lookup(rawIP string) Location {
 		loc = r.locations[ranges[index].loc]
 	}
 
-	r.cacheMu.Lock()
-	if len(r.cache) >= maxCacheEntries {
-		clear(r.cache)
-	}
-	r.cache[addr] = loc
-	r.cacheMu.Unlock()
-
+	// Legacy CSV lookups already reference resident metadata.
 	return loc
+}
+
+func locationTextBytes(loc Location) int {
+	return len(loc.CountryCode) + len(loc.Country) + len(loc.Region) + len(loc.City)
+}
+
+func (r *Resolver) cacheLocation(addr netip.Addr, loc Location) {
+	textBytes := locationTextBytes(loc)
+	if textBytes > maxCacheTextBytes {
+		return
+	}
+	r.cacheMu.Lock()
+	defer r.cacheMu.Unlock()
+	if _, exists := r.cache[addr]; exists {
+		return
+	}
+	for len(r.cache) >= maxCacheEntries || r.cacheTextBytes+textBytes > maxCacheTextBytes {
+		oldest := r.cacheOrder[r.cacheHead]
+		r.cacheTextBytes -= locationTextBytes(r.cache[oldest])
+		delete(r.cache, oldest)
+		r.cacheOrder[r.cacheHead] = netip.Addr{}
+		r.cacheHead = (r.cacheHead + 1) % len(r.cacheOrder)
+	}
+	if len(r.cache) == len(r.cacheOrder) {
+		order := make([]netip.Addr, min(maxCacheEntries, max(16, 2*len(r.cacheOrder))))
+		n := copy(order, r.cacheOrder[r.cacheHead:])
+		copy(order[n:], r.cacheOrder[:r.cacheHead])
+		r.cacheOrder = order
+		r.cacheHead = 0
+	}
+	slot := (r.cacheHead + len(r.cache)) % len(r.cacheOrder)
+	r.cacheOrder[slot] = addr
+	r.cache[addr] = loc
+	r.cacheTextBytes += textBytes
 }
 
 func addressKey(addr netip.Addr) ([16]byte, bool) {

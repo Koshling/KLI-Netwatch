@@ -1,9 +1,10 @@
 package classifier
 
 import (
-	"netwatch/internal/event"
 	"testing"
 	"time"
+
+	"netwatch/internal/event"
 )
 
 func TestTrafficWindowBoundary(t *testing.T) {
@@ -11,12 +12,12 @@ func TestTrafficWindowBoundary(t *testing.T) {
 		delay time.Duration
 		want  Category
 	}{{10 * time.Second, Threat}, {10*time.Second + 1, User}} {
-		c := New()
+		var c Client
 		e := event.AccessEvent{ClientIP: "8.8.8.8", Time: time.Unix(100, 0), Status: 200}
 		for i := 0; i < 1000; i++ {
 			c.Classify(e)
 		}
-		if n := len(c.clients[e.ClientIP].requests); n != 40 {
+		if n := len(c.requests); n != 40 {
 			t.Fatal(n)
 		}
 		e.Time = e.Time.Add(tc.delay)
@@ -27,7 +28,7 @@ func TestTrafficWindowBoundary(t *testing.T) {
 	}
 }
 func TestDelayedError(t *testing.T) {
-	c := New()
+	var c Client
 	e := event.AccessEvent{ClientIP: "8.8.8.8", Status: 200, Time: time.Unix(100, 0)}
 	for range 39 {
 		c.Classify(e)

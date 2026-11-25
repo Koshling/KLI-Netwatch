@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"netwatch/internal/dashboard"
 	"netwatch/internal/geoip"
@@ -28,7 +29,7 @@ func main() {
 			os.Exit(2)
 		}
 		if _, err := runSetup(*path, true, false, os.Stdin, os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, "Setup error:", err)
+			fmt.Fprintln(os.Stderr, "Setup error:", cleanDiagnostic(err.Error()))
 			os.Exit(1)
 		}
 		return
@@ -55,14 +56,14 @@ func main() {
 			}
 		})
 		if err := runAutoConfig(*configPath, os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, "Setup error:", err)
+			fmt.Fprintln(os.Stderr, "Setup error:", cleanDiagnostic(err.Error()))
 			os.Exit(1)
 		}
 		return
 	}
 	if *interval != "" || *mode == "interval" {
 		if *mode != "live" && *mode != "interval" {
-			fmt.Fprintln(os.Stderr, "--interval conflicts with --mode", *mode)
+			fmt.Fprintln(os.Stderr, "--interval conflicts with --mode", cleanDiagnostic(*mode))
 			os.Exit(2)
 		}
 		*mode = "interval"
@@ -110,7 +111,7 @@ func main() {
 
 	cfg, err := runSetup(*configPath, false, terminal(os.Stdin) && terminal(os.Stdout), os.Stdin, os.Stderr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Configuration error: %s\n", cleanDiagnostic(err.Error()))
 		os.Exit(1)
 	}
 
@@ -123,9 +124,12 @@ func main() {
 
 	var resolver *geoip.Resolver
 	if cfg.GeoIPIPv4DB != "" || cfg.GeoIPIPv6DB != "" {
-		resolver, err = geoip.Open(cfg.GeoIPIPv4DB, cfg.GeoIPIPv6DB)
+		resolver, err = geoip.OpenContext(ctx, cfg.GeoIPIPv4DB, cfg.GeoIPIPv6DB)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "GeoIP disabled: %v\n", err)
+			fmt.Fprintf(os.Stderr, "GeoIP disabled: %s\n", cleanDiagnostic(err.Error()))
 			resolver = nil
 		}
 	}
@@ -154,15 +158,26 @@ func main() {
 			os.Exit(2)
 		}
 		if _, _, err := launch.HistoryBounds(time.Now()); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, cleanDiagnostic(err.Error()))
 			os.Exit(2)
 		}
 	}
 
 	if err := runMonitor(ctx, cfg, geoOptions, launch); err != nil {
-		fmt.Fprintf(os.Stderr, "Dashboard error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Dashboard error: %s\n", cleanDiagnostic(err.Error()))
 		os.Exit(1)
 	}
 
 	fmt.Println("\nNETWATCH stopped.")
+}
+
+// cleanDiagnostic keeps values from files, arguments and remote peers on one
+// terminal line without interpreting control sequences.
+func cleanDiagnostic(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
+			return '?'
+		}
+		return r
+	}, value)
 }

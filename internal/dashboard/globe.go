@@ -445,7 +445,9 @@ func (v globeView) landAt(nx, ny float64) bool {
 
 const (
 	cellOcean = iota
-	cellLand
+	cellLandFar
+	cellLandMid
+	cellLandNear
 	cellRing
 	cellNone
 )
@@ -487,28 +489,24 @@ func renderGlobe(width, height int, angle float64, theme Theme) []string {
 		cosTilt: math.Cos(globeTilt),
 	}
 
-	kind := make([][]uint8, height)
-	depth := make([][]float64, height)
+	kind := make([]uint8, width*height)
 	for y := 0; y < height; y++ {
-		kind[y] = make([]uint8, width)
-		depth[y] = make([]float64, width)
+		ny := (float64(y) - cy) / ry
 		for x := 0; x < width; x++ {
 			nx := (float64(x) - cx) / rx
-			ny := (float64(y) - cy) / ry
 			r := math.Hypot(nx, ny)
 
 			// Толщина контура в долях радиуса ≈ полклетки вдоль направления к краю.
 			half := 0.5 * (math.Abs(nx)/rx + math.Abs(ny)/ry) / math.Max(r, 1e-9)
+			cell := &kind[y*width+x]
 			if r > 1+half {
-				kind[y][x] = cellNone
+				*cell = cellNone
 				continue
 			}
 			if r >= 1-half {
-				kind[y][x] = cellRing
+				*cell = cellRing
 				continue
 			}
-
-			depth[y][x] = math.Sqrt(math.Max(0, 1-r*r))
 
 			// 4 подвыборки в клетке: береговая линия получается ровнее и плавнее при вращении.
 			hits := 0
@@ -518,15 +516,21 @@ func renderGlobe(width, height int, angle float64, theme Theme) []string {
 				}
 			}
 			if hits >= 2 {
-				kind[y][x] = cellLand
-			} else {
-				kind[y][x] = cellOcean
+				z := math.Sqrt(math.Max(0, 1-r*r))
+				switch {
+				case z > 0.5:
+					*cell = cellLandNear
+				case z > 0.25:
+					*cell = cellLandMid
+				default:
+					*cell = cellLandFar
+				}
 			}
 		}
 	}
 
 	isOcean := func(x, y int) bool {
-		return x >= 0 && x < width && y >= 0 && y < height && kind[y][x] == cellOcean
+		return x >= 0 && x < width && y >= 0 && y < height && kind[y*width+x] == cellOcean
 	}
 
 	for y := 0; y < height; y++ {
@@ -535,21 +539,21 @@ func renderGlobe(width, height int, angle float64, theme Theme) []string {
 			char := byte(' ')
 			color := theme.Muted
 
-			switch kind[y][x] {
+			cell := kind[y*width+x]
+			switch cell {
 			case cellRing:
 				char = '.'
-			case cellLand:
-				z := depth[y][x]
+			case cellLandFar, cellLandMid, cellLandNear:
 				coast := isOcean(x-1, y) || isOcean(x+1, y) || isOcean(x, y-1) || isOcean(x, y+1)
 				color = theme.Accent
 				switch {
-				case coast && z > 0.25:
+				case coast && cell != cellLandFar:
 					char = '#'
 				case coast:
 					char = '+'
-				case z > 0.5:
+				case cell == cellLandNear:
 					char = '+'
-				case z > 0.25:
+				case cell == cellLandMid:
 					char = ':'
 				default:
 					char = '.'

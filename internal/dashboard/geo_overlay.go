@@ -5,9 +5,10 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"netwatch/internal/geoip"
 	"netwatch/internal/classifier"
+	"netwatch/internal/geoip"
 )
 
 type GeoOptions struct {
@@ -67,21 +68,20 @@ func renderGlobeWithTraffic(
 	}
 
 	var pulse classifier.Category
-	overlay := make([][]globeCell, height)
-	for y := range overlay {
-		overlay[y] = make([]globeCell, width)
-	}
+	overlay := make([]globeCell, width*height)
+	touched := make([]bool, height)
 
 	plot := func(x, y int, char rune) {
 		if x < 0 || x >= width || y < 0 || y >= height {
 			return
 		}
-		old := overlay[y][x].glyph
+		old := overlay[y*width+x].glyph
 		if old == 'S' {
 			return
 		}
 		if char == 'S' || old == 0 || old == ' ' || char == '*' || char == '+' {
-			overlay[y][x] = globeCell{char, pulse}
+			overlay[y*width+x] = globeCell{char, pulse}
+			touched[y] = true
 		}
 	}
 
@@ -110,7 +110,7 @@ func renderGlobeWithTraffic(
 	marked := 0
 	for _, visitor := range visitors {
 		p := project(visitor.Longitude, visitor.Latitude)
-		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x].glyph == 0 {
+		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y*width+p.x].glyph == 0 {
 			if glyph := sourceGlyph(now.Sub(visitor.Seen)); glyph != 0 {
 				pulse = visitor.Category
 				plot(p.x, p.y, glyph)
@@ -118,11 +118,13 @@ func renderGlobeWithTraffic(
 			}
 		}
 	}
-	for i := len(recent)-1; i >= 0 && marked < limit; i-- {
+	for i := len(recent) - 1; i >= 0 && marked < limit; i-- {
 		p := project(recent[i].Longitude, recent[i].Latitude)
-		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y][p.x].glyph == 0 {
+		if p.depth > 0 && p.y >= 0 && p.y < height && p.x >= 0 && p.x < width && overlay[p.y*width+p.x].glyph == 0 {
 			glyph := sourceGlyph(now.Sub(recent[i].Seen))
-			if glyph == 0 { continue }
+			if glyph == 0 {
+				continue
+			}
 			pulse = recent[i].Category
 			plot(p.x, p.y, glyph)
 			marked++
@@ -152,7 +154,9 @@ func renderGlobeWithTraffic(
 		if y >= len(overlay) {
 			break
 		}
-		lines[y] = applyGlobeOverlay(lines[y], overlay[y], theme)
+		if touched[y] {
+			lines[y] = applyGlobeOverlay(lines[y], overlay[y*width:(y+1)*width], theme)
+		}
 	}
 
 	return lines
@@ -235,6 +239,7 @@ func signalLimit(width, height int) int {
 
 func applyGlobeOverlay(line string, overlay []globeCell, theme Theme) string {
 	var out strings.Builder
+	out.Grow(len(line))
 	cell := 0
 
 	for i := 0; i < len(line); {
@@ -252,7 +257,7 @@ func applyGlobeOverlay(line string, overlay []globeCell, theme Theme) string {
 			continue
 		}
 
-		_, size := decodeRune(line[i:])
+		_, size := utf8.DecodeRuneInString(line[i:])
 		if size == 0 {
 			break
 		}
@@ -270,7 +275,9 @@ func applyGlobeOverlay(line string, overlay []globeCell, theme Theme) string {
 			}
 			if theme.Traffic != "" {
 				color = theme.Traffic
-				if char == '*' || char == 'S' { color += "\033[1m" }
+				if char == '*' || char == 'S' {
+					color += "\033[1m"
+				}
 			}
 			if category := overlay[cell].category; category != "" {
 				color = pulseColor(category, theme)
@@ -288,13 +295,6 @@ func applyGlobeOverlay(line string, overlay []globeCell, theme Theme) string {
 	return out.String()
 }
 
-func decodeRune(s string) (rune, int) {
-	for _, r := range s {
-		return r, len(string(r))
-	}
-	return 0, 0
-}
-
 func geoStatus(options GeoOptions, count int) string {
 	if options.Resolver == nil {
 		return "GEOIP: OFF"
@@ -303,7 +303,7 @@ func geoStatus(options GeoOptions, count int) string {
 }
 
 type globeCell struct {
-	glyph rune
+	glyph    rune
 	category classifier.Category
 }
 
@@ -325,16 +325,22 @@ func pulseColor(category classifier.Category, theme Theme) string {
 	light := theme.Name == "REVERSE MONO"
 	switch category {
 	case classifier.Bot:
-		if light { return "\033[1;36;47m" }
+		if light {
+			return "\033[1;36;47m"
+		}
 		return "\033[1;96m"
 	case classifier.Threat:
-		if light { return "\033[1;31;47m" }
+		if light {
+			return "\033[1;31;47m"
+		}
 		return "\033[1;91m"
 	default:
 		if theme.UserPulse != "" {
 			return theme.UserPulse
 		}
-		if light { return "\033[1;34;47m" }
+		if light {
+			return "\033[1;34;47m"
+		}
 		return "\033[1;93m"
 	}
 }
