@@ -49,7 +49,7 @@ Replay and interval can also be launched directly:
 ./netwatch -mode replay -from 2026-11-22T10:00:00+03:00 -to 2026-11-22T11:00:00+03:00
 ```
 
-Replay follows file order and keeps its playback position moving forward when an earlier timestamp appears late in the file. Use an immutable log copy for repeatable historical results. The `geoip convert` subcommand works independently of monitor configuration.
+Replay and Interval require chronological timestamps in the selected, filtered log records. Equal timestamps are allowed. Use an immutable log copy for repeatable historical results. The `geoip convert` subcommand works independently of monitor configuration.
 
 Each session tracks the first 65,536 distinct client IPs. If more appear, a `+` marks the client count as a lower bound. Client category totals and distinct globe points reflect the tracked clients. Traffic, HTTP and historical mapped-request totals continue counting all included requests. Live summarizes malformed and oversized lines as `SKIPPED`. Monitor inputs must be regular files, and the JSON config is limited to 1 MiB.
 

@@ -84,6 +84,7 @@ func runMode(ctx context.Context, session *dashboard.Session, cfg config.Config,
 	}
 	defer file.Close()
 	scan := func(ctx context.Context, emit func(event.AccessEvent) error) (int, error) {
+		emit = history.InOrder(emit)
 		return history.ScanSnapshot(ctx, file, info.Size(), parse, cfg.MaxLineSize, start, end, func(e event.AccessEvent) error {
 			if !keep(e) {
 				return nil

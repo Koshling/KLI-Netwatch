@@ -85,3 +85,15 @@ func ScanSnapshot(ctx context.Context, f *os.File, size int64, parse event.Acces
 		oversized = false
 	}
 }
+
+// InOrder checks timestamps of the events accepted for one historical pass.
+func InOrder(emit func(event.AccessEvent) error) func(event.AccessEvent) error {
+	var previous time.Time
+	return func(e event.AccessEvent) error {
+		if e.Time.Before(previous) {
+			return fmt.Errorf("timestamps out of order at %s", e.Time.Format(time.RFC3339Nano))
+		}
+		previous = e.Time
+		return emit(e)
+	}
+}
