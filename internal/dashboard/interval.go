@@ -79,7 +79,7 @@ func (s *Session) RunInterval(ctx context.Context, scan func(context.Context, fu
 	for {
 		w, h := terminalSize()
 		t := themes[s.themeIndex]
-		rows := []string{fitANSI(t.Accent+"INTERVAL  [M] Menu  [Q] Exit", w)}
+		rows := []string{fitANSI(t.heading()+"INTERVAL  [M] Menu  [Q] Exit", w)}
 		if h > 1 {
 			rows = append(rows, fitANSI(t.UI+"Scanning historical log...", w))
 		}
@@ -105,7 +105,7 @@ func (s *Session) RunInterval(ctx context.Context, scan func(context.Context, fu
 			switch key {
 			case 'm', 'M':
 				return ErrMenu
-			case '1', '2', '3', '4', '5':
+			case '1', '2', '3', '4', '5', '6', '7':
 				s.selectTheme(key)
 				view.clearScreen = true
 			}
@@ -146,7 +146,7 @@ func (s *Session) showOverview(ctx context.Context, d *Dashboard, keys <-chan ru
 				d.overview.routes = (d.overview.routes + 1) % 4
 				dirty = true
 			}
-			if k >= '1' && k <= '5' && int(k-'1') != d.themeIndex {
+			if k >= '1' && k <= '7' && int(k-'1') != d.themeIndex {
 				d.themeIndex = s.selectTheme(k)
 				d.clearScreen = true
 			}
@@ -164,7 +164,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 			rows[i] = fitANSI(s, w)
 		}
 	}
-	put(0, t.Accent+"Interval Overview")
+	put(0, t.heading()+"Interval Overview")
 	if w < 59 || h < 18 {
 		put(1, "[M] Menu  [Q] Exit")
 		put(2, "Resize to 60x18 or larger")
@@ -198,7 +198,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 			routes = overviewRoutes(grid, left, height, serverCell, o.routes >= 2)
 		}
 	}
-	lines := []string{t.Accent + "REQUESTS / TIME"}
+	lines := []string{t.heading() + "REQUESTS / TIME"}
 	bins := make([]int, min(right, len(o.timeline)))
 	peak := 1
 	for i, n := range o.timeline {
@@ -228,16 +228,16 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 	if levels > 1 {
 		lines = append(lines, fmt.Sprintf("Peak %d / bin", peakIfTraffic(peak, d.total)))
 	}
-	lines = append(lines, t.Accent+"HTTP STATUS")
+	lines = append(lines, t.heading()+"HTTP STATUS")
 	for i, name := range []string{"2xx", "3xx", "4xx", "5xx", "other"} {
 		lines = append(lines, fmt.Sprintf("%-5s %d", name, d.statusCounts[i]))
 	}
-	lines = append(lines, t.Accent+"FINAL CLIENTS", fmt.Sprintf("USER %d", counts[classifier.User]), fmt.Sprintf("BOT %d", counts[classifier.Bot]), fmt.Sprintf("THREAT %d", counts[classifier.Threat]))
+	lines = append(lines, t.heading()+"FINAL CLIENTS", fmt.Sprintf("USER %d", counts[classifier.User]), fmt.Sprintf("BOT %d", counts[classifier.Bot]), fmt.Sprintf("THREAT %d", counts[classifier.Threat]))
 	for i := 0; i < h-6; i++ {
 		var l string
 		switch {
 		case i == 0:
-			l = t.Accent + "WORLD / REQUEST DENSITY"
+			l = t.heading() + "WORLD / REQUEST DENSITY"
 		case i <= height:
 			var b strings.Builder
 			for x := 0; x < left; x++ {
@@ -269,7 +269,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 			l = t.Data + "* 1-9   @ 10+ requests"
 			if serverCell >= 0 { l += "   S server" }
 		case i == height+2:
-			l = t.Accent + "RECENT REQUESTS"
+			l = t.heading() + "RECENT REQUESTS"
 
 		default:
 			j := len(d.feed) - 1 - (i - height - 3)
@@ -296,7 +296,7 @@ func (d *Dashboard) overviewRows(w, h, skipped int, counts map[classifier.Catego
 		state := [...]string{"off", "dots", "braille", "efficient"}[o.routes]
 		controls += "[L] Lines " + state + "   "
 	}
-	put(h-1, t.Accent+controls+"[1-5] Themes   "+t.Name)
+	put(h-1, t.Accent+controls+"[1-7] Themes   "+t.Name)
 	return rows
 }
 func peakIfTraffic(peak, total int) int {

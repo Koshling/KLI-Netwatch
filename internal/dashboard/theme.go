@@ -3,11 +3,20 @@ package dashboard
 type Theme struct {
 	Name       string
 	Traffic    string
+	UserPulse  string
+	Heading    string
 	UI         string
 	Data       string
 	Accent     string
 	Muted      string
 	Background string
+}
+
+func (t Theme) heading() string {
+	if t.Heading != "" {
+		return t.Heading
+	}
+	return t.Accent
 }
 
 var themes = []Theme{
@@ -21,6 +30,7 @@ var themes = []Theme{
 	},
 	{
 		Name:       "MATRIX",
+		Heading:    "\033[1;97m",
 		Traffic:    "\033[96m",
 		UI:         "\033[37m",
 		Data:       "\033[32m",
@@ -53,5 +63,26 @@ var themes = []Theme{
 		Accent:     "\033[1;30;47m",
 		Muted:      "\033[2;30;47m",
 		Background: "\033[47m",
+	},
+	{
+		Name:       "ICE",
+		Traffic:    "\033[97m",
+		UserPulse:  "\033[1;97m",
+		Heading:    "\033[1;97m",
+		UI:         "\033[97m",
+		Data:       "\033[38;5;75m",
+		Accent:     "\033[1;38;5;75m",
+		Muted:      "\033[38;5;67m",
+		Background: "\033[40m",
+	},
+	{
+		Name:       "AMBER",
+		Traffic:    "\033[38;5;230m",
+		UserPulse:  "\033[1;38;5;230m",
+		UI:         "\033[38;5;214m",
+		Data:       "\033[38;5;214m",
+		Accent:     "\033[1;38;5;220m",
+		Muted:      "\033[38;5;172m",
+		Background: "\033[40m",
 	},
 }

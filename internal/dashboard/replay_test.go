@@ -167,7 +167,7 @@ func TestReplayFrameFits80x24(t *testing.T) {
 				t.Fatalf("theme %s: missing separator on row %d", theme.Name, row+1)
 			}
 		}
-		if !strings.HasSuffix(strings.TrimRight(frame[22], " "), "Themes 1-5") || !strings.HasSuffix(strings.TrimRight(frame[23], " "), "THEME: "+theme.Name) ||
+		if !strings.HasSuffix(strings.TrimRight(frame[22], " "), "Themes 1-7") || !strings.HasSuffix(strings.TrimRight(frame[23], " "), "THEME: "+theme.Name) ||
 			!strings.Contains(frame[22], "[+/-] speed") || !strings.Contains(frame[23], "[Q] Exit") || !strings.Contains(frame[23], "[M] Menu") {
 			t.Fatalf("theme %s: footer controls or labels missing", theme.Name)
 		}

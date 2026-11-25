@@ -35,7 +35,7 @@ See the [access log format reference](docs/access-logs.md) for custom Nginx temp
 
 ## Modes and controls
 
-The regular launch opens Live. Press **M** (`m` or `M`) in Live, Replay or Interval to open **MENU**. Use the arrow keys to select a mode and Enter to open it. Themes **1–5** carry over between screens, and **Q** exits NETWATCH.
+The regular launch opens Live. Press **M** (`m` or `M`) in Live, Replay or Interval to open **MENU**. Use the arrow keys to select a mode and Enter to open it. Themes **1–7** carry over between screens, and **Q** exits NETWATCH. **6** selects Ice and **7** selects Amber.
 
 Replay and Interval use the configured access log and the last 15 minutes by default. Press **S** on either card to set a different duration (for example `01:30`, `01,30`, `0130` or `1h30m`), a pair of RFC3339 timestamps separated by `/`, or a different log file. The form shows the configured log path until you type an override. In the settings, use Enter or the down arrow to move to **Start** and Enter to launch. Esc goes back.
 
