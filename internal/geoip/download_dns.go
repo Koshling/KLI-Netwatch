@@ -3,6 +3,7 @@ package geoip
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +18,7 @@ import (
 func dbipTransport(fallbackUsed *atomic.Bool) *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxResponseHeaderBytes = 64 << 10
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	transport.DialContext = systemDNSFallback(transport.DialContext, systemDNSAddresses, fallbackUsed)
 	return transport
 }

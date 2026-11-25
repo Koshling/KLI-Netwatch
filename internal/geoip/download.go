@@ -178,12 +178,12 @@ func installDBIP(ctx context.Context, src io.Reader, dataDir, detail, source str
 			os.RemoveAll(dir)
 		}
 	}()
-	v4, err := os.Create(filepath.Join(dir, "ipv4.csv"))
+	v4, err := os.OpenFile(filepath.Join(dir, "ipv4.csv"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return "", err
 	}
 	defer v4.Close()
-	v6, err := os.Create(filepath.Join(dir, "ipv6.csv"))
+	v6, err := os.OpenFile(filepath.Join(dir, "ipv6.csv"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return "", err
 	}
@@ -217,7 +217,25 @@ func installDBIP(ctx context.Context, src io.Reader, dataDir, detail, source str
 		}
 	}
 	credit := fmt.Sprintf("%s\nSource: %s\nAdapted to NETWATCH NWGEO (%s detail).\nCountry map points: Natural Earth, public domain (https://www.naturalearthdata.com/).\n", DBIPAttribution, source, detail)
-	if err := os.WriteFile(filepath.Join(dir, "ATTRIBUTION.txt"), []byte(credit), 0600); err != nil {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	// Setup discovers an installation by this marker. Publish it only after
+	// the complete attribution file and both databases exist.
+	marker, err := os.CreateTemp(dir, ".attribution-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(marker.Name())
+	_, writeErr := io.WriteString(marker, credit)
+	closeErr := marker.Close()
+	if writeErr != nil {
+		return "", writeErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	if err := os.Link(marker.Name(), filepath.Join(dir, "ATTRIBUTION.txt")); err != nil {
 		return "", err
 	}
 	success = true
