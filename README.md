@@ -29,6 +29,8 @@ The user configuration defaults to `$XDG_CONFIG_HOME/netwatch/netwatch.json` (no
 
 Use `./netwatch --auto-config` to create a configuration from a readable standard access log and any detected local GeoIP files, then exit. It leaves existing configurations intact and performs no downloads.
 
+See the [access log format reference](docs/access-logs.md) for custom Nginx templates, Caddy, Traefik, Apache, Envoy and JSON field mappings.
+
 ## Modes and controls
 
 The regular launch opens Live. Press **M** (`m` or `M`) in Live, Replay or Interval to open **MENU**. Use the arrow keys to select a mode and Enter to open it. Themes **1–5** carry over between screens, and **Q** exits NETWATCH.

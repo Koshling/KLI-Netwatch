@@ -95,3 +95,34 @@ func TestGeoIPDownloadDefaultShowsLicenseBeforeDownload(t *testing.T) {
 		t.Fatalf("unexpected GeoIP prompts:\n%s", prompt)
 	}
 }
+
+func TestSetupPersistsNginxTemplate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	access := filepath.Join(dir, "site.log")
+	path := filepath.Join(dir, "netwatch.json")
+	const line = "GET|192.0.2.1|2026-11-25T12:00:00+00:00|201|/check?q=1"
+	const directive = "log_format site escape=none '$request_method|$remote_addr|$time_iso8601|$status|$request_uri';"
+	if err := os.WriteFile(access, []byte(line+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	input := strings.NewReader(access + "\nnginx\n" + directive + "\nnever\n")
+	if _, err := runSetup(path, true, false, input, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AccessFormat != "nginx" || cfg.NginxLogFormat != directive {
+		t.Fatalf("unexpected setup config: %+v", cfg)
+	}
+	parse, err := cfg.AccessParser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := parse(line)
+	if err != nil || e.Status != 201 || e.ClientIP != "192.0.2.1" || e.URL != "/check?q=1" {
+		t.Fatalf("unexpected access event: %+v, %v", e, err)
+	}
+}

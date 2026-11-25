@@ -66,6 +66,7 @@ func CreateSetup(path string, cfg Config) error {
 	}
 	file := configFile{
 		AccessLog: cfg.AccessLog, ErrorLog: cfg.ErrorLog, AccessFormat: cfg.AccessFormat,
+		NginxLogFormat: cfg.NginxLogFormat, NginxEscape: cfg.NginxEscape, AccessFields: cfg.AccessFields,
 		GeoIPIPv4DB: cfg.GeoIPIPv4DB, GeoIPIPv6DB: cfg.GeoIPIPv6DB,
 		GeoIPPrompt: cfg.GeoIPPrompt, GeoIPSource: cfg.GeoIPSource,
 	}

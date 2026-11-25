@@ -198,11 +198,18 @@ func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
 
 		fmt.Fprintln(p.out, detectErr)
 		for {
-			answer, err := p.ask("Access log format (combined/common/main/json)", config.Default().AccessFormat)
+			answer, err := p.ask("Access log format ("+strings.Join(event.SampleFormats(), "/")+"/nginx/main)", config.Default().AccessFormat)
 			if err != nil {
 				return err
 			}
 			cfg.AccessFormat = strings.ToLower(answer)
+			cfg.NginxLogFormat = ""
+			if cfg.AccessFormat == "nginx" {
+				cfg.NginxLogFormat, err = p.ask("Nginx log_format directive or single-line template", "")
+				if err != nil {
+					return err
+				}
+			}
 			if err := cfg.Validate(); err != nil {
 				fmt.Fprintln(p.out, err)
 				continue
@@ -215,8 +222,9 @@ func (p setupPrompts) configureAccessLog(cfg *config.Config) error {
 func detectAccessFormat(r io.Reader) (string, error) {
 	scanner := bufio.NewScanner(io.LimitReader(r, 64*1024))
 	detected := ""
+	formats := event.SampleFormats()
 	for i := 0; i < 12 && scanner.Scan(); i++ {
-		for _, format := range []string{"combined", "common", "json"} {
+		for _, format := range formats {
 			if _, err := event.ParseAccess(scanner.Text(), format); err == nil {
 				if detected != "" && detected != format {
 					return "", fmt.Errorf("access log sample matches multiple formats (%s and %s)", detected, format)
