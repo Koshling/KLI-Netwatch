@@ -1,11 +1,11 @@
 package dashboard
 
 import (
-	"strings"
-	"strconv"
-	"time"
 	"netwatch/internal/classifier"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"netwatch/internal/event"
 )
@@ -76,8 +76,8 @@ func TestTrafficPulseFrames(t *testing.T) {
 }
 
 func TestSourceAgeAndQueuedCategories(t *testing.T) {
-	for second, want := range map[int]rune{0:'o', 5:'@', 15:':', 30:0} {
-		if got := sourceGlyph(time.Duration(second)*time.Second); got != want {
+	for second, want := range map[int]rune{0: 'o', 5: '@', 15: ':', 30: 0} {
+		if got := sourceGlyph(time.Duration(second) * time.Second); got != want {
 			t.Fatalf("age %d: got %q, want %q", second, got, want)
 		}
 	}
@@ -91,7 +91,9 @@ func TestSourceAgeAndQueuedCategories(t *testing.T) {
 	if len(d.signals) != 1 || d.signals[0].Category != classifier.User || len(d.pending) != 1 {
 		t.Fatal("two clients at the same coordinates must each get a turn")
 	}
-	for i := 0; i < signalFrames; i++ { d.advanceSignals() }
+	for i := 0; i < signalFrames; i++ {
+		d.advanceSignals()
+	}
 	d.scheduleSignals()
 	if len(d.signals) != 1 || d.signals[0].Category != classifier.Bot {
 		t.Fatal("queued pulse lost its classification")
@@ -146,5 +148,26 @@ func TestResizeKeepsWaitingRequest(t *testing.T) {
 		if marker.Age != 0 {
 			t.Fatal("requeued pulse did not restart")
 		}
+	}
+}
+
+func TestRecentLocationsStayBoundedWithFutureTimestamps(t *testing.T) {
+	d := newDashboard(GeoOptions{})
+	d.signalCap = 12
+	d.currentSecond = time.Unix(100, 0)
+	seen := d.currentSecond.Add(time.Hour)
+	for i := range maxRecentLocations + 2 {
+		d.signals = d.signals[:0] // Simulate the previous pulse finishing.
+		d.startSignal(geoKey{longitude: i}, strconv.Itoa(i), classifier.User, seen)
+		d.scheduleSignals()
+	}
+	if len(d.recent) != maxRecentLocations || d.recent[0].Source != "2" ||
+		d.recent[len(d.recent)-1].Source != strconv.Itoa(maxRecentLocations+1) {
+		t.Fatalf("recent locations did not retain the newest %d entries", maxRecentLocations)
+	}
+	d.currentSecond = seen.Add(31 * time.Second)
+	d.scheduleSignals()
+	if len(d.recent) != 0 {
+		t.Fatal("expired locations remained in the overlay")
 	}
 }

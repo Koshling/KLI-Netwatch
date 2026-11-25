@@ -16,7 +16,10 @@ import (
 	"netwatch/internal/event"
 )
 
-const feedLimit = 100
+const (
+	feedLimit          = 100
+	maxRecentLocations = 512
+)
 
 type feedEvent struct {
 	when     time.Time
@@ -867,6 +870,7 @@ func (d *Dashboard) scheduleSignals() {
 			recent = append(recent, marker)
 		}
 	}
+	clear(d.recent[len(recent):])
 	d.recent = recent
 	waiting := d.pending[:0]
 	for _, marker := range d.pending {
@@ -890,6 +894,12 @@ func (d *Dashboard) scheduleSignals() {
 				d.recent = append(d.recent[:i], d.recent[i+1:]...)
 				break
 			}
+		}
+		// Log timestamps can be ahead of the display clock. Cap the list
+		// even when the normal time-based expiration cannot remove entries.
+		if len(d.recent) == maxRecentLocations {
+			copy(d.recent, d.recent[1:])
+			d.recent = d.recent[:maxRecentLocations-1]
 		}
 		d.recent = append(d.recent, marker)
 	}

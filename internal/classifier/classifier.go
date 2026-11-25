@@ -77,9 +77,8 @@ func classifyEvent(e event.AccessEvent, state *Client, now time.Time) Category {
 }
 
 func errorBurst(e event.AccessEvent, state *Client, now time.Time) bool {
-	// Высокая частота сама по себе не делает клиента угрозой.
-	// Учитываем её только вместе с серией ответов 403/404.
-	// Only the most recent 40 timestamps can establish the threshold.
+	// A 403 or 404 triggers the burst check when the most recent 40
+	// requests, including this one, fall within the 10-second window.
 	stamp := now.UnixNano()
 	if n := len(state.requests); n > 0 {
 		last := (int(state.next) + n - 1) % n

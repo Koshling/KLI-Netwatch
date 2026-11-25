@@ -71,7 +71,7 @@ Traffic filtering defaults to on when `apply_traffic_filters` is omitted. Set it
 
 ## GeoIP
 
-GeoIP is optional. Setup checks for `ipv4.nwgeo`, `ipv6.nwgeo`, `ipv4.csv` and `ipv6.csv` beside the config, in `$XDG_DATA_HOME/netwatch` (normally `~/.local/share/netwatch`), and in the local `data` directory. Choose `path` to supply your own compatible files.
+GeoIP is optional. Setup checks for `ipv4.nwgeo`, `ipv6.nwgeo`, `ipv4.csv` and `ipv6.csv` beside the config, in `$XDG_DATA_HOME/netwatch` (normally `~/.local/share/netwatch`), and in the local `data` directory, in that order. Within each directory, standalone databases take precedence. If several completed DB-IP installations are present, setup picks the newest usable pair by attribution file modification time. Choose `path` to supply your own compatible files.
 
 Setup can download DB-IP Lite as a gzip-compressed CSV and convert both address families to NWGEO automatically. It keeps the two NWGEO files and their attribution and removes the conversion CSV files. **Countries** is the smallest download. **Regions** downloads the same archive as **Cities** and combines adjacent ranges with the same region to reduce the installed size. Region points are approximate. When no local database is found, Enter selects download and opens the detail menu. `n` skips the download for now. `never` skips future prompts. To re-enable prompting, set `"geoip_prompt": true` in the config while both database paths are empty.
 
