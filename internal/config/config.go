@@ -17,6 +17,8 @@ type Config struct {
 	NginxLogFormat       string
 	NginxEscape          string
 	AccessFields         map[string]string
+	ShowMonitoring       bool
+	BannedIPs            []string
 	MaxLineSize          int
 	PollInterval         time.Duration
 	GeoIPIPv4DB          string
@@ -35,6 +37,8 @@ type configFile struct {
 	NginxLogFormat  string            `json:"nginx_log_format,omitempty"`
 	NginxEscape     string            `json:"nginx_escape,omitempty"`
 	AccessFields    map[string]string `json:"access_fields,omitempty"`
+	ShowMonitoring  bool              `json:"show_monitoring_traffic,omitempty"`
+	BannedIPs       []string          `json:"banned_ips,omitempty"`
 	MaxLineSize     int               `json:"max_line_size"`
 	PollInterval    string            `json:"poll_interval"`
 	GeoIPIPv4DB     string            `json:"geoip_ipv4_db"`
@@ -80,6 +84,8 @@ func Load(path string) (Config, error) {
 	cfg.NginxLogFormat = file.NginxLogFormat
 	cfg.NginxEscape = file.NginxEscape
 	cfg.AccessFields = file.AccessFields
+	cfg.ShowMonitoring = file.ShowMonitoring
+	cfg.BannedIPs = file.BannedIPs
 	if file.MaxLineSize != 0 {
 		cfg.MaxLineSize = file.MaxLineSize
 	}
@@ -118,12 +124,20 @@ func (c Config) AccessParser() (event.AccessParser, error) {
 	return event.NewAccessParser(c.AccessFormat, c.NginxLogFormat, c.NginxEscape, c.AccessFields)
 }
 
+func (c Config) TrafficFilter() (event.TrafficFilter, error) {
+	return event.NewTrafficFilter(c.ShowMonitoring, c.BannedIPs)
+}
+
 func (c Config) Validate() error {
 	if c.AccessLog == "" || c.ErrorLog == "" {
 		return fmt.Errorf("log paths cannot be empty")
 	}
 
 	if _, err := c.AccessParser(); err != nil {
+		return err
+	}
+
+	if _, err := c.TrafficFilter(); err != nil {
 		return err
 	}
 

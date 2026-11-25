@@ -2,6 +2,8 @@
   "access_log": "/var/log/nginx/access.log",
   "error_log": "/var/log/nginx/error.log",
   "access_format": "combined",
+  "show_monitoring_traffic": false,
+  "banned_ips": [],
   "max_line_size": 65536,
   "poll_interval": "500ms",
   "geoip_ipv4_db": "",
