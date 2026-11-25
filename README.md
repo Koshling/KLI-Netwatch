@@ -51,6 +51,20 @@ Replay and interval can also be launched directly:
 
 These flags use historical access logs. The `geoip convert` subcommand works independently of monitor configuration.
 
+## Traffic noise
+
+Live, Replay and Interval hide successful `GET` and `HEAD` checks (HTTP 2xx) from Uptime Kuma, Prometheus, Kubernetes `kube-probe`, AWS `ELB-HealthChecker` and the default UptimeRobot User-Agent. Redirects, errors, unknown User-Agents and requests using other methods remain visible. The filter uses the User-Agent recorded in the access log. Checks with an unrecognized or missing User-Agent remain visible.
+
+```json
+{
+  "apply_traffic_filters": true,
+  "show_monitoring_bot_traffic": true,
+  "hidden_ips": ["192.0.2.42", "2001:db8::42"]
+}
+```
+
+Traffic filtering defaults to on when `apply_traffic_filters` is omitted. Set it to `false` to show all traffic and bypass both filters. Set `show_monitoring_bot_traffic` to `true` to include these checks. `hidden_ips` excludes all requests from the listed client addresses, including errors, regardless of the monitoring setting. The list accepts exact IPv4 and IPv6 addresses. The filter applies to the client's parsed IP and leaves the original log file intact.
+
 ## GeoIP
 
 GeoIP is optional. Setup checks for `ipv4.nwgeo`, `ipv6.nwgeo`, `ipv4.csv` and `ipv6.csv` beside the config, in `$XDG_DATA_HOME/netwatch` (normally `~/.local/share/netwatch`), and in the local `data` directory. Choose `path` to supply your own compatible files.

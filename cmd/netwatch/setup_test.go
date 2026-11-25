@@ -29,7 +29,7 @@ func TestFirstRunUsesDefaultConfigPathAndRemembersGeoIPChoice(t *testing.T) {
 	input := access + "\nn\n"
 	cfg, err := runSetup("", true, false, strings.NewReader(input), &out)
 	if err != nil || cfg.AccessFormat != "common" || !cfg.GeoIPPrompt ||
-		cfg.ErrorLog != config.Default().ErrorLog {
+		cfg.ErrorLog != config.Default().ErrorLog || !cfg.ApplyTrafficFilters || cfg.ShowMonitoring || len(cfg.HiddenIPs) != 0 {
 		t.Fatalf("setup failed: %+v, %v\n%s", cfg, err, &out)
 	}
 	if !strings.Contains(out.String(), "Saved configuration: "+path) ||
@@ -42,7 +42,7 @@ func TestFirstRunUsesDefaultConfigPathAndRemembersGeoIPChoice(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, err := config.Load(path)
-	if err != nil || stored.GeoIPPrompt || stored.AccessLog != access {
+	if err != nil || stored.GeoIPPrompt || stored.AccessLog != access || !stored.ApplyTrafficFilters || stored.ShowMonitoring || len(stored.HiddenIPs) != 0 {
 		t.Fatalf("unexpected saved configuration: %+v, %v", stored, err)
 	}
 	if _, err := runSetup("", false, true, strings.NewReader(""), io.Discard); err != nil {
